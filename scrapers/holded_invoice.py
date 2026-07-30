@@ -7,7 +7,7 @@ from datetime import date, datetime
 from typing import Optional
 
 import undetected_chromedriver as uc
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import ElementClickInterceptedException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
@@ -78,6 +78,54 @@ def wait_for_element(driver, xpath: str, timeout: int = 30):
     )
 
 
+def safe_click(driver, element):
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({ behavior: 'smooth', block: 'center' });", element)
+        element.click()
+        return True
+    except ElementClickInterceptedException:
+        try:
+            driver.execute_script("arguments[0].click();", element)
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+def accept_cookies(driver, timeout: int = 10) -> bool:
+    cookie_texts = [
+        "aceptar cookies",
+        "aceptar todo",
+        "permitir todo",
+        "aceptar",
+        "accept cookies",
+        "accept all",
+        "allow cookies",
+        "allow all",
+        "ok",
+        "cerrar",
+    ]
+    for text in cookie_texts:
+        xpath = (
+            "//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" + text.lower() + "')]"
+            " | //a[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" + text.lower() + "')]"
+            " | //span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" + text.lower() + "')]"
+            " | //div[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" + text.lower() + "')]"
+        )
+        try:
+            element = WebDriverWait(driver, timeout).until(
+                EC.element_to_be_clickable((By.XPATH, xpath))
+            )
+            if safe_click(driver, element):
+                logger.info("Aceptadas cookies / cerrado modal con texto %r", text)
+                time.sleep(2)
+                return True
+        except TimeoutException:
+            continue
+    return False
+
+
 def find_and_click(driver, text_values: list, timeout: int = 20) -> bool:
     for text in text_values:
         xpath = (
@@ -117,6 +165,8 @@ def is_already_logged_in(driver) -> bool:
 def login(driver, email: str, password: str, otp: Optional[str] = None) -> None:
     logger.info("Entrando en Holded...")
     driver.get(HOLDEN_LOGIN_URL)
+    time.sleep(3)
+    accept_cookies(driver)
 
     if find_and_click(driver, ["continuar con google", "iniciar sesión con google", "sign in with google", "continue with google", "google"]):
         logger.info("Intentando login por Google SSO...")
@@ -258,7 +308,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 18, 10)
+            candidate = datetime(year, month, 30, 18, 20)
             if candidate > now:
                 return candidate
         month += 1
