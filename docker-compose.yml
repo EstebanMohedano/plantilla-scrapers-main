@@ -14,7 +14,7 @@ services:
       - HOLDED_EMAIL=you@example.com
       - HOLDED_PASSWORD=secret
       - HOLDED_OTP=
-      - HOLDED_HEADLESS=true
+      - HOLDED_HEADLESS=false
     volumes:
       - ./data:/app/data       # datos persistentes (cookies, perfiles, outputs)
     shm_size: 2gb

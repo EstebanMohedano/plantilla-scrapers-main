@@ -19,6 +19,7 @@ HOLDEN_LOGIN_URL = "https://app.holded.com/login"
 HOLDEN_INVOICES_URL = "https://app.holded.com/sales/revenue#settings:/subscription/invoices"
 DOWNLOAD_FOLDER = "/app/data/holded_downloads"
 USER_DATA_DIR = "/tmp/holded_user_data"
+LAST_RUN_FILE = "/app/data/holded_invoice_last_run.txt"
 
 
 def get_env(key: str, default: str | None = None) -> str | None:
@@ -46,8 +47,15 @@ def build_driver(download_dir: str, user_data_dir: str, headless: bool = False) 
     options.add_argument("--disable-translate")
     options.add_argument("--disable-default-apps")
     options.add_argument("--disable-popup-blocking")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--window-position=0,0")
+    options.add_argument("--start-maximized")
     options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    options.add_argument("--lang=es-ES")
     options.add_argument("--remote-debugging-port=0")
+    options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
     if headless:
         options.add_argument("--headless=new")
 
@@ -59,7 +67,8 @@ def build_driver(download_dir: str, user_data_dir: str, headless: bool = False) 
         "profile.default_content_setting_values.automatic_downloads": 1,
     }
     options.add_experimental_option("prefs", prefs)
-    return uc.Chrome(options=options)
+    driver = uc.Chrome(options=options)
+    return driver
 
 
 def wait_for_element(driver, xpath: str, timeout: int = 30):
@@ -175,6 +184,21 @@ def download_invoice_from_holded(driver) -> bool:
     return False
 
 
+def load_last_run_date() -> datetime.date | None:
+    if not os.path.exists(LAST_RUN_FILE):
+        return None
+    try:
+        with open(LAST_RUN_FILE, "r", encoding="utf-8") as f:
+            return datetime.strptime(f.read().strip(), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def mark_last_run(date_value: datetime.date) -> None:
+    with open(LAST_RUN_FILE, "w", encoding="utf-8") as f:
+        f.write(date_value.strftime("%Y-%m-%d"))
+
+
 def download_invoice() -> None:
     email = required_env("HOLDED_EMAIL")
     password = required_env("HOLDED_PASSWORD")
@@ -192,6 +216,7 @@ def download_invoice() -> None:
         login(driver, email, password, otp)
         if download_invoice_from_holded(driver):
             logger.info("Factura descargada correctamente en %s", DOWNLOAD_FOLDER)
+            mark_last_run(datetime.now().date())
         else:
             raise RuntimeError("No se pudo descargar la factura del mes.")
         time.sleep(10)
@@ -206,7 +231,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 13, 5)
+            candidate = datetime(year, month, 30, 13, 45)
             if candidate > now:
                 return candidate
         month += 1
@@ -215,8 +240,25 @@ def next_monthly_run() -> datetime:
             year += 1
 
 
+def should_run_today() -> bool:
+    now = datetime.now()
+    if now.day != 30:
+        return False
+    if now.hour < 13 or (now.hour == 13 and now.minute < 45):
+        return False
+    last_run = load_last_run_date()
+    return last_run != now.date()
+
+
 def run_scheduler() -> None:
     logger.info("Iniciando programador mensual de Holded.")
+    if should_run_today():
+        try:
+            logger.info("Hoy es 30 y aún no se ha ejecutado. Ejecutando ahora.")
+            download_invoice()
+        except Exception as exc:
+            logger.exception("Error en la ejecución de recuperación inmediata: %s", exc)
+
     while True:
         target = next_monthly_run()
         logger.info("Siguiente ejecución programada: %s", target.strftime("%Y-%m-%d %H:%M"))

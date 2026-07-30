@@ -49,7 +49,8 @@ echo "   CDP  → ws://HOST:9222"
 # Lanza el programador mensual de Holded en background
 if [ -f /app/holded_invoice.py ]; then
   echo "📥 Iniciando descarga mensual de factura Holded..."
-  python /app/holded_invoice.py >> /app/data/holded_invoice.log 2>&1 &
+  python -u /app/holded_invoice.py >> /app/data/holded_invoice.log 2>&1 &
+  echo "📥 Logs de Holded: /app/data/holded_invoice.log"
 fi
 
 # Lanza tu scraper en background
