@@ -94,6 +94,15 @@ def wait_for_element(driver, xpath: str, timeout: int = 30):
     )
 
 
+def wait_for_page_ready(driver, timeout: int = 30):
+    try:
+        WebDriverWait(driver, timeout).until(
+            lambda d: d.execute_script("return document.readyState") == "complete"
+        )
+    except TimeoutException:
+        logger.debug("La página no alcanzó readyState=complete en el tiempo esperado.")
+
+
 def safe_click(driver, element):
     try:
         driver.execute_script("arguments[0].scrollIntoView({ behavior: 'smooth', block: 'center' });", element)
@@ -210,7 +219,7 @@ def is_already_logged_in(driver) -> bool:
 def login(driver, email: str, password: str, otp: Optional[str] = None) -> None:
     logger.info("Entrando en Holded...")
     driver.get(HOLDEN_LOGIN_URL)
-    time.sleep(3)
+    wait_for_page_ready(driver, timeout=30)
     accept_cookies(driver)
 
     if find_and_click(driver, ["continuar con google", "iniciar sesión con google", "sign in with google", "continue with google", "ingresar con google", "google"]):
@@ -264,6 +273,7 @@ def login(driver, email: str, password: str, otp: Optional[str] = None) -> None:
 def navigate_to_invoices(driver) -> None:
     logger.info("Navegando a la página de facturas de Holded...")
     driver.get(HOLDEN_INVOICES_URL)
+    wait_for_page_ready(driver, timeout=30)
     try:
         WebDriverWait(driver, 30).until(
             lambda d: "sales/revenue" in d.current_url.lower() or "subscription/invoices" in d.current_url.lower()
@@ -347,13 +357,22 @@ def download_invoice() -> None:
     user_data_dir = USER_DATA_DIR
     os.makedirs(user_data_dir, exist_ok=True)
 
-    driver = build_driver(
-        DOWNLOAD_FOLDER,
-        user_data_dir=user_data_dir,
-        headless=headless,
-        use_existing_chrome=not headless,
-        debugger_address="127.0.0.1:9223",
-    )
+    try:
+        driver = build_driver(
+            DOWNLOAD_FOLDER,
+            user_data_dir=user_data_dir,
+            headless=headless,
+            use_existing_chrome=not headless,
+            debugger_address="127.0.0.1:9223",
+        )
+    except Exception as exc:
+        logger.warning("No se pudo conectar a Chrome existente (%s). Iniciando sesión nueva...", exc)
+        driver = build_driver(
+            DOWNLOAD_FOLDER,
+            user_data_dir=user_data_dir,
+            headless=headless,
+            use_existing_chrome=False,
+        )
     set_download_folder(driver, DOWNLOAD_FOLDER)
     try:
         if not is_already_logged_in(driver):
@@ -381,7 +400,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 20, 5)
+            candidate = datetime(year, month, 30, 20, 20)
             if candidate > now:
                 return candidate
         month += 1
@@ -394,7 +413,7 @@ def should_run_today() -> bool:
     now = datetime.now()
     if now.day != 30:
         return False
-    if now.hour < 20 or (now.hour == 20 and now.minute < 5):
+    if now.hour < 20 or (now.hour == 20 and now.minute < 20):
         return False
     last_run = load_last_run_date()
     return last_run != now.date()
