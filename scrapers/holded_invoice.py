@@ -132,7 +132,15 @@ def accept_cookies(driver, timeout: int = 10) -> bool:
         "allow all",
         "ok",
         "cerrar",
+        "got it",
+        "understood",
     ]
+    extra_xpaths = [
+        "//button[contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept') or contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'cookie') or contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'allow')]",
+        "//button[contains(translate(@class, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept') or contains(translate(@class, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'cookie') or contains(translate(@class, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'allow')]",
+        "//div[contains(translate(@class, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'cookie') and (contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'aceptar') or contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept'))]//button",
+    ]
+
     for text in cookie_texts:
         xpath = (
             "//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" + text.lower() + "')]"
@@ -140,16 +148,25 @@ def accept_cookies(driver, timeout: int = 10) -> bool:
             " | //span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" + text.lower() + "')]"
             " | //div[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" + text.lower() + "')]"
         )
+        elements = driver.find_elements(By.XPATH, xpath)
+        for element in elements:
+            if safe_click(driver, element):
+                logger.info("Aceptadas cookies / cerrado modal con texto %r", text)
+                time.sleep(2)
+                return True
+
+    for xpath in extra_xpaths:
         try:
             element = WebDriverWait(driver, timeout).until(
                 EC.element_to_be_clickable((By.XPATH, xpath))
             )
             if safe_click(driver, element):
-                logger.info("Aceptadas cookies / cerrado modal con texto %r", text)
+                logger.info("Aceptadas cookies / cerrado modal por xpath adicional %r", xpath)
                 time.sleep(2)
                 return True
         except TimeoutException:
             continue
+
     return False
 
 
@@ -196,15 +213,19 @@ def login(driver, email: str, password: str, otp: Optional[str] = None) -> None:
     time.sleep(3)
     accept_cookies(driver)
 
-    if find_and_click(driver, ["continuar con google", "iniciar sesión con google", "sign in with google", "continue with google", "google"]):
+    if find_and_click(driver, ["continuar con google", "iniciar sesión con google", "sign in with google", "continue with google", "ingresar con google", "google"]):
         logger.info("Intentando login por Google SSO...")
         time.sleep(8)
-        WebDriverWait(driver, 30).until(lambda d: "login" not in d.current_url.lower())
+        WebDriverWait(driver, 30).until(lambda d: "login" not in d.current_url.lower() or "accounts.google.com" in d.current_url.lower())
         logger.info("Login por Google completado.")
         return
 
+    login_button = find_and_click(driver, ["iniciar sesión", "login", "sign in", "entrar"])
+    if login_button:
+        time.sleep(2)
+
     email_input = WebDriverWait(driver, 30).until(
-        EC.element_to_be_clickable((By.XPATH, "//input[@type='email' or contains(@name, 'email')]"))
+        EC.element_to_be_clickable((By.XPATH, "//input[@type='email' or contains(@name, 'email') or contains(@id, 'email') or contains(@placeholder, 'email')]"))
     )
     email_input.clear()
     email_input.send_keys(email)
@@ -360,7 +381,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 19, 53)
+            candidate = datetime(year, month, 30, 20, 5)
             if candidate > now:
                 return candidate
         month += 1
@@ -373,7 +394,7 @@ def should_run_today() -> bool:
     now = datetime.now()
     if now.day != 30:
         return False
-    if now.hour < 19 or (now.hour == 19 and now.minute < 53):
+    if now.hour < 20 or (now.hour == 20 and now.minute < 5):
         return False
     last_run = load_last_run_date()
     return last_run != now.date()
