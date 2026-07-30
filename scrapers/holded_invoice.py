@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 HOLDEN_LOGIN_URL = "https://app.holded.com/login"
 HOLDEN_INVOICES_URL = "https://app.holded.com/sales/revenue#settings:/subscription/invoices"
 DOWNLOAD_FOLDER = "/app/data/holded_downloads"
-USER_DATA_DIR = "/tmp/holded_user_data"
+USER_DATA_DIR = "/app/data/holded_user_data"
 LAST_RUN_FILE = "/app/data/holded_invoice_last_run.txt"
 
 
@@ -54,8 +54,6 @@ def build_driver(download_dir: str, user_data_dir: str, headless: bool = False) 
     options.add_argument("--start-maximized")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-features=AudioServiceOutOfProcess,MediaSessionService")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
     options.add_argument("--lang=es-ES")
     options.add_argument("--remote-debugging-port=0")
     options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
@@ -107,16 +105,37 @@ def find_and_click(driver, text_values: list, timeout: int = 20) -> bool:
     return False
 
 
+def is_already_logged_in(driver) -> bool:
+    driver.get(HOLDEN_INVOICES_URL)
+    time.sleep(5)
+    current_url = driver.current_url.lower()
+    if "login" in current_url or "signin" in current_url or "accounts.google.com" in current_url:
+        return False
+    return True
+
+
 def login(driver, email: str, password: str, otp: Optional[str] = None) -> None:
     logger.info("Entrando en Holded...")
     driver.get(HOLDEN_LOGIN_URL)
-    wait_for_element(driver, "//input[@type='email' or contains(@name, 'email')]", timeout=30)
 
-    email_input = driver.find_element(By.XPATH, "//input[@type='email' or contains(@name, 'email')]")
-    password_input = driver.find_element(By.XPATH, "//input[@type='password' or contains(@name, 'password')]")
+    if find_and_click(driver, ["continuar con google", "iniciar sesión con google", "sign in with google", "continue with google", "google"]):
+        logger.info("Intentando login por Google SSO...")
+        time.sleep(8)
+        WebDriverWait(driver, 30).until(lambda d: "login" not in d.current_url.lower())
+        logger.info("Login por Google completado.")
+        return
 
+    email_input = WebDriverWait(driver, 30).until(
+        EC.element_to_be_clickable((By.XPATH, "//input[@type='email' or contains(@name, 'email')]"))
+    )
     email_input.clear()
     email_input.send_keys(email)
+    email_input.send_keys(Keys.ENTER)
+
+    password_input = WebDriverWait(driver, 30).until(
+        EC.element_to_be_clickable((By.XPATH, "//input[@type='password' or contains(@name, 'password')]"))
+    )
+    driver.execute_script("arguments[0].scrollIntoView(true);", password_input)
     password_input.clear()
     password_input.send_keys(password)
     password_input.send_keys(Keys.ENTER)
@@ -203,20 +222,25 @@ def mark_last_run(date_value: datetime.date) -> None:
 
 
 def download_invoice() -> None:
-    email = required_env("HOLDED_EMAIL")
-    password = required_env("HOLDED_PASSWORD")
+    email = get_env("HOLDED_EMAIL")
+    password = get_env("HOLDED_PASSWORD")
     otp = get_env("HOLDED_OTP")
     headless = get_env("HOLDED_HEADLESS", "false").lower() in ("1", "true", "yes")
 
     os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-    user_data_dir = f"{USER_DATA_DIR}_{int(time.time())}"
-    if os.path.exists(user_data_dir):
-        shutil.rmtree(user_data_dir, ignore_errors=True)
+    user_data_dir = USER_DATA_DIR
     os.makedirs(user_data_dir, exist_ok=True)
 
     driver = build_driver(DOWNLOAD_FOLDER, user_data_dir=user_data_dir, headless=headless)
     try:
-        login(driver, email, password, otp)
+        if not is_already_logged_in(driver):
+            logger.info("No hay sesión activa. Iniciando login de Holded...")
+            if not email or not password:
+                raise RuntimeError("No hay sesión activa y faltan HOLDED_EMAIL/HOLDED_PASSWORD.")
+            login(driver, email, password, otp)
+        else:
+            logger.info("Sesión Holded ya activa, saltando login.")
+
         if download_invoice_from_holded(driver):
             logger.info("Factura descargada correctamente en %s", DOWNLOAD_FOLDER)
             mark_last_run(datetime.now().date())
@@ -234,7 +258,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 17, 40)
+            candidate = datetime(year, month, 30, 18, 10)
             if candidate > now:
                 return candidate
         month += 1
