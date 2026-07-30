@@ -35,14 +35,19 @@ def required_env(key: str) -> str:
     return value
 
 
-def build_driver(download_dir: str, user_data_dir: str, headless: bool = False) -> uc.Chrome:
+def build_driver(
+    download_dir: str,
+    user_data_dir: Optional[str],
+    headless: bool = False,
+    use_existing_chrome: bool = True,
+    debugger_address: str = "127.0.0.1:9223",
+) -> uc.Chrome:
     os.environ["DBUS_SESSION_BUS_ADDRESS"] = "/dev/null"
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument(f"--user-data-dir={user_data_dir}")
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-background-networking")
     options.add_argument("--disable-sync")
@@ -55,10 +60,20 @@ def build_driver(download_dir: str, user_data_dir: str, headless: bool = False) 
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-features=AudioServiceOutOfProcess,MediaSessionService")
     options.add_argument("--lang=es-ES")
-    options.add_argument("--remote-debugging-port=0")
     options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-    if headless:
-        options.add_argument("--headless=new")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
+
+    if use_existing_chrome and not headless:
+        logger.info("Conectando al Chrome existente en %s", debugger_address)
+        options.debugger_address = debugger_address
+    else:
+        if user_data_dir:
+            options.add_argument(f"--user-data-dir={user_data_dir}")
+        if headless:
+            options.add_argument("--headless=new")
+        else:
+            options.add_argument("--remote-debugging-port=0")
 
     prefs = {
         "download.default_directory": download_dir,
@@ -68,6 +83,7 @@ def build_driver(download_dir: str, user_data_dir: str, headless: bool = False) 
         "profile.default_content_setting_values.automatic_downloads": 1,
     }
     options.add_experimental_option("prefs", prefs)
+
     driver = uc.Chrome(options=options)
     return driver
 
@@ -281,7 +297,13 @@ def download_invoice() -> None:
     user_data_dir = USER_DATA_DIR
     os.makedirs(user_data_dir, exist_ok=True)
 
-    driver = build_driver(DOWNLOAD_FOLDER, user_data_dir=user_data_dir, headless=headless)
+    driver = build_driver(
+        DOWNLOAD_FOLDER,
+        user_data_dir=user_data_dir,
+        headless=headless,
+        use_existing_chrome=not headless,
+        debugger_address="127.0.0.1:9223",
+    )
     try:
         if not is_already_logged_in(driver):
             logger.info("No hay sesión activa. Iniciando login de Holded...")
@@ -308,7 +330,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 18, 20)
+            candidate = datetime(year, month, 30, 18, 35)
             if candidate > now:
                 return candidate
         month += 1
