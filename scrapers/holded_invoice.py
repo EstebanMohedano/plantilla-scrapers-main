@@ -233,7 +233,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 17, 10)
+            candidate = datetime(year, month, 30, 17, 25)
             if candidate > now:
                 return candidate
         month += 1
@@ -246,7 +246,7 @@ def should_run_today() -> bool:
     now = datetime.now()
     if now.day != 30:
         return False
-    if now.hour < 17 or (now.hour == 17 and now.minute < 10):
+    if now.hour < 17 or (now.hour == 17 and now.minute < 25):
         return False
     last_run = load_last_run_date()
     return last_run != now.date()
@@ -254,6 +254,8 @@ def should_run_today() -> bool:
 
 def run_scheduler() -> None:
     logger.info("Iniciando programador mensual de Holded.")
+    next_run = next_monthly_run()
+    logger.info("Hora programada de la próxima ejecución: %s", next_run.strftime("%Y-%m-%d %H:%M"))
     if should_run_today():
         try:
             logger.info("Hoy es 30 y aún no se ha ejecutado. Ejecutando ahora.")

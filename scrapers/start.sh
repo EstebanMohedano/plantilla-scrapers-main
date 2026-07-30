@@ -46,6 +46,18 @@ echo "✅ Listo."
 echo "   VNC  → vnc://HOST:5900  (pass: ${VNC_PASSWORD:-scraper})"
 echo "   CDP  → ws://HOST:9222"
 
+# Mostrar la próxima ejecución programada de Holded
+if [ -f /app/holded_invoice.py ]; then
+  NEXT_RUN=$(python - <<'PY'
+from datetime import datetime
+import holded_invoice
+next_run = holded_invoice.next_monthly_run()
+print(next_run.strftime('%Y-%m-%d %H:%M'))
+PY
+)
+  echo "⏱️  Próxima ejecución Holded: ${NEXT_RUN}"
+fi
+
 # Lanza el programador mensual de Holded en background
 if [ -f /app/holded_invoice.py ]; then
   echo "📥 Iniciando descarga mensual de factura Holded..."
