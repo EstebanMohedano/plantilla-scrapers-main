@@ -240,20 +240,28 @@ def login(driver, email: str, password: str, otp: Optional[str] = None) -> None:
     logger.info("Login completado con éxito.")
 
 
-def download_invoice_from_holded(driver) -> bool:
-    logger.info("Navegando a la página de facturas... %s", HOLDEN_INVOICES_URL)
+def navigate_to_invoices(driver) -> None:
+    logger.info("Navegando a la página de facturas de Holded...")
     driver.get(HOLDEN_INVOICES_URL)
-    time.sleep(5)
+    try:
+        WebDriverWait(driver, 30).until(
+            lambda d: "sales/revenue" in d.current_url.lower() or "subscription/invoices" in d.current_url.lower()
+        )
+    except TimeoutException:
+        logger.warning("No se cargó la URL directa de facturas; intento navegación alternativa.")
+        find_and_click(driver, ["facturas", "invoices", "ventas", "sales"])
+        time.sleep(5)
+    accept_cookies(driver)
+    time.sleep(3)
+
+
+def download_invoice_from_holded(driver) -> bool:
+    navigate_to_invoices(driver)
 
     if not find_and_click(driver, ["pagada", "paid"]):
         logger.warning("No se encontró un botón 'Pagada'. Continúo de todas formas.")
         time.sleep(3)
 
-    if find_and_click(driver, ["descargar", "download", "ver factura", "view invoice", "factura"]):
-        logger.info("Se ha intentado iniciar la descarga.")
-        return True
-
-    logger.info("Buscando primera factura para abrirla...")
     invoice_link = None
     candidates = driver.find_elements(
         By.XPATH,
@@ -262,7 +270,7 @@ def download_invoice_from_holded(driver) -> bool:
     if candidates:
         invoice_link = candidates[0]
     else:
-        rows = driver.find_elements(By.XPATH, "//tr")
+        rows = driver.find_elements(By.XPATH, "//tr[.//a or .//button or .//div[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'factura') or contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'invoice')]]")
         if rows:
             invoice_link = rows[0]
 
@@ -273,13 +281,16 @@ def download_invoice_from_holded(driver) -> bool:
     try:
         if not safe_click(driver, invoice_link):
             invoice_link.click()
+        logger.info("Abierta la factura más reciente.")
         time.sleep(5)
     except Exception as exc:
         logger.warning("No se pudo abrir la factura automáticamente: %s", exc)
 
-    if find_and_click(driver, ["guardar en google drive", "guardar en drive", "save to google drive", "save to drive", "guardar en drive"]):
+    if find_and_click(driver, ["guardar en google drive", "guardar en drive", "save to google drive", "save to drive", "google drive"]):
         logger.info("Iniciado guardado en Google Drive.")
         time.sleep(5)
+        if find_and_click(driver, ["guardar", "save", "confirmar", "continuar", "ok"]):
+            logger.info("Confirmado el guardado en Google Drive.")
         return True
 
     if find_and_click(driver, ["descargar", "download"]):
@@ -349,7 +360,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 19, 35)
+            candidate = datetime(year, month, 30, 19, 53)
             if candidate > now:
                 return candidate
         month += 1
@@ -362,7 +373,7 @@ def should_run_today() -> bool:
     now = datetime.now()
     if now.day != 30:
         return False
-    if now.hour < 19 or (now.hour == 19 and now.minute < 15):
+    if now.hour < 19 or (now.hour == 19 and now.minute < 53):
         return False
     last_run = load_last_run_date()
     return last_run != now.date()

@@ -81,3 +81,8 @@ docker compose down
 ---
 
 Asegúrate de adaptar el archivo `api.py` a tu caso de uso y de configurar correctamente la red Docker si usas `coolify`.
+
+
+ls -la /app/data
+cat /app/data/holded_invoice.log
+ls -la /app/data/holded_downloads
