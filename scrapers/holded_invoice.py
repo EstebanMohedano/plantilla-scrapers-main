@@ -1,6 +1,7 @@
 import calendar
 import logging
 import os
+import shutil
 import time
 from datetime import datetime
 
@@ -17,6 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 HOLDEN_LOGIN_URL = "https://app.holded.com/login"
 HOLDEN_INVOICES_URL = "https://app.holded.com/sales/revenue#settings:/subscription/invoices"
 DOWNLOAD_FOLDER = "/app/data/holded_downloads"
+USER_DATA_DIR = "/tmp/holded_user_data"
 
 
 def get_env(key: str, default: str | None = None) -> str | None:
@@ -37,6 +39,14 @@ def build_driver(download_dir: str, headless: bool = False) -> uc.Chrome:
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
+    options.add_argument(f"--user-data-dir={USER_DATA_DIR}")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-background-networking")
+    options.add_argument("--disable-sync")
+    options.add_argument("--disable-translate")
+    options.add_argument("--disable-default-apps")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--disable-blink-features=AutomationControlled")
     if headless:
         options.add_argument("--headless=new")
 
@@ -48,7 +58,6 @@ def build_driver(download_dir: str, headless: bool = False) -> uc.Chrome:
         "profile.default_content_setting_values.automatic_downloads": 1,
     }
     options.add_experimental_option("prefs", prefs)
-    options.add_argument("--disable-blink-features=AutomationControlled")
     return uc.Chrome(options=options)
 
 
@@ -172,6 +181,10 @@ def download_invoice() -> None:
     headless = get_env("HOLDED_HEADLESS", "false").lower() in ("1", "true", "yes")
 
     os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+    if os.path.exists(USER_DATA_DIR):
+        shutil.rmtree(USER_DATA_DIR, ignore_errors=True)
+    os.makedirs(USER_DATA_DIR, exist_ok=True)
+
     driver = build_driver(DOWNLOAD_FOLDER, headless=headless)
     try:
         login(driver, email, password, otp)
@@ -191,7 +204,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 13, 00)
+            candidate = datetime(year, month, 30, 12, 12)
             if candidate > now:
                 return candidate
         month += 1
