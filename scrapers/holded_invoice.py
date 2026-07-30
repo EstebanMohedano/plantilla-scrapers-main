@@ -35,6 +35,7 @@ def required_env(key: str) -> str:
 
 
 def build_driver(download_dir: str, user_data_dir: str, headless: bool = False) -> uc.Chrome:
+    os.environ["DBUS_SESSION_BUS_ADDRESS"] = "/dev/null"
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -51,6 +52,7 @@ def build_driver(download_dir: str, user_data_dir: str, headless: bool = False) 
     options.add_argument("--window-position=0,0")
     options.add_argument("--start-maximized")
     options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-features=AudioServiceOutOfProcess,MediaSessionService")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
     options.add_argument("--lang=es-ES")
