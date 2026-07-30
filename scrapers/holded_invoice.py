@@ -3,7 +3,8 @@ import logging
 import os
 import shutil
 import time
-from datetime import datetime
+from datetime import date, datetime
+from typing import Optional
 
 import undetected_chromedriver as uc
 from selenium.common.exceptions import TimeoutException
@@ -22,7 +23,7 @@ USER_DATA_DIR = "/tmp/holded_user_data"
 LAST_RUN_FILE = "/app/data/holded_invoice_last_run.txt"
 
 
-def get_env(key: str, default: str | None = None) -> str | None:
+def get_env(key: str, default: Optional[str] = None) -> Optional[str]:
     value = os.getenv(key, default)
     return value.strip() if isinstance(value, str) else value
 
@@ -79,7 +80,7 @@ def wait_for_element(driver, xpath: str, timeout: int = 30):
     )
 
 
-def find_and_click(driver, text_values: list[str], timeout: int = 20) -> bool:
+def find_and_click(driver, text_values: list, timeout: int = 20) -> bool:
     for text in text_values:
         xpath = (
             "//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" \
@@ -106,7 +107,7 @@ def find_and_click(driver, text_values: list[str], timeout: int = 20) -> bool:
     return False
 
 
-def login(driver, email: str, password: str, otp: str | None = None) -> None:
+def login(driver, email: str, password: str, otp: Optional[str] = None) -> None:
     logger.info("Entrando en Holded...")
     driver.get(HOLDEN_LOGIN_URL)
     wait_for_element(driver, "//input[@type='email' or contains(@name, 'email')]", timeout=30)
@@ -186,7 +187,7 @@ def download_invoice_from_holded(driver) -> bool:
     return False
 
 
-def load_last_run_date() -> datetime.date | None:
+def load_last_run_date() -> Optional[date]:
     if not os.path.exists(LAST_RUN_FILE):
         return None
     try:
@@ -233,7 +234,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 17, 25)
+            candidate = datetime(year, month, 30, 17, 40)
             if candidate > now:
                 return candidate
         month += 1
@@ -246,7 +247,7 @@ def should_run_today() -> bool:
     now = datetime.now()
     if now.day != 30:
         return False
-    if now.hour < 17 or (now.hour == 17 and now.minute < 25):
+    if now.hour < 17 or (now.hour == 17 and now.minute < 40):
         return False
     last_run = load_last_run_date()
     return last_run != now.date()

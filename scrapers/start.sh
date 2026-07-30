@@ -48,8 +48,9 @@ echo "   CDP  → ws://HOST:9222"
 
 # Mostrar la próxima ejecución programada de Holded
 if [ -f /app/holded_invoice.py ]; then
-  NEXT_RUN=$(python - <<'PY'
-from datetime import datetime
+  NEXT_RUN=$(python3 - <<'PY'
+import sys
+sys.path.insert(0, '/app')
 import holded_invoice
 next_run = holded_invoice.next_monthly_run()
 print(next_run.strftime('%Y-%m-%d %H:%M'))
