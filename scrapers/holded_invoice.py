@@ -172,9 +172,10 @@ def find_and_click(driver, text_values: list, timeout: int = 20) -> bool:
             element = WebDriverWait(driver, timeout).until(
                 EC.element_to_be_clickable((By.XPATH, xpath))
             )
-            element.click()
-            logger.info("Clicado elemento con texto %r", text)
-            return True
+            if safe_click(driver, element):
+                logger.info("Clicado elemento con texto %r", text)
+                return True
+            logger.debug("No se pudo hacer click en elemento con texto %r", text)
         except TimeoutException:
             logger.debug("No se encontró elemento con texto %r", text)
     return False
@@ -270,16 +271,22 @@ def download_invoice_from_holded(driver) -> bool:
         return False
 
     try:
-        invoice_link.click()
+        if not safe_click(driver, invoice_link):
+            invoice_link.click()
         time.sleep(5)
     except Exception as exc:
         logger.warning("No se pudo abrir la factura automáticamente: %s", exc)
+
+    if find_and_click(driver, ["guardar en google drive", "guardar en drive", "save to google drive", "save to drive", "guardar en drive"]):
+        logger.info("Iniciado guardado en Google Drive.")
+        time.sleep(5)
+        return True
 
     if find_and_click(driver, ["descargar", "download"]):
         logger.info("Descarga iniciada tras abrir factura.")
         return True
 
-    logger.warning("No se encontró un botón de descarga después de abrir la factura.")
+    logger.warning("No se encontró un botón de descarga ni Guardar en Google Drive después de abrir la factura.")
     return False
 
 
@@ -342,7 +349,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 19, 15)
+            candidate = datetime(year, month, 30, 19, 35)
             if candidate > now:
                 return candidate
         month += 1
