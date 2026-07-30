@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile.scrapers
+    container_name: scraper
+    ports:
+      - "5900:5900"   # VNC
+      - "9222:9222"   # Chrome DevTools Protocol
+    environment:
+      - VNC_PASSWORD=scraper
+    volumes:
+      - ./data:/app/data       # datos persistentes (cookies, perfiles, outputs)
+    shm_size: 2gb
+    restart: unless-stopped
+    networks:
+      - coolify
+
+networks:
+  coolify:
+    external: true
+    name: coolify
