@@ -191,7 +191,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 12, 20)
+            candidate = datetime(year, month, 30, 13, 00)
             if candidate > now:
                 return candidate
         month += 1
