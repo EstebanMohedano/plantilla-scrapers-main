@@ -11,6 +11,10 @@ services:
       - "9222:9222"   # Chrome DevTools Protocol
     environment:
       - VNC_PASSWORD=scraper
+      - HOLDED_EMAIL=you@example.com
+      - HOLDED_PASSWORD=secret
+      - HOLDED_OTP=
+      - HOLDED_HEADLESS=true
     volumes:
       - ./data:/app/data       # datos persistentes (cookies, perfiles, outputs)
     shm_size: 2gb

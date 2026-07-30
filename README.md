@@ -8,7 +8,8 @@ Repositorio base para ejecutar scrapers en Docker usando Chrome estable, Seleniu
 - `docker-compose.yml` - Servicio `scraper` listo para levantar con Docker Compose.
 - `scrapers/requirements.txt` - Dependencias Python necesarias.
 - `scrapers/api.py` - Punto de entrada del scraper; reemplaza este archivo con tu propia lógica.
-- `scrapers/start.sh` - Script de arranque del contenedor que inicia Xvfb, VNC, Chrome y tu script Python.
+- `scrapers/holded_invoice.py` - Programador mensual que entra en Holded y descarga la factura del mes.
+- `scrapers/start.sh` - Script de arranque del contenedor que inicia Xvfb, VNC, Chrome y los scripts Python.
 
 ## Características
 
@@ -54,12 +55,17 @@ docker compose down
 ## Personalización
 
 - Modifica `scrapers/api.py` con tu lógica de scraping.
+- Modifica `scrapers/holded_invoice.py` si necesitas adaptar la navegación a tu cuenta de Holded.
 - Añade dependencias en `scrapers/requirements.txt`.
-- Cambia variables de entorno en `docker-compose.yml` si necesitas otro `VNC_PASSWORD`.
+- Cambia variables de entorno en `docker-compose.yml` si necesitas otro `VNC_PASSWORD` o tus credenciales Holded.
 
 ## Variables importantes
 
 - `VNC_PASSWORD` - contraseña del servidor VNC. Se puede configurar en `docker-compose.yml`.
+- `HOLDED_EMAIL` - correo electrónico de acceso a Holded.
+- `HOLDED_PASSWORD` - contraseña de Holded.
+- `HOLDED_OTP` - código OTP opcional si tu cuenta requiere verificación adicional.
+- `HOLDED_HEADLESS` - `true` para ejecutar Chrome en modo headless dentro del contenedor.
 
 ## Estructura recomendada de trabajo
 

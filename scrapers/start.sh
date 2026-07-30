@@ -45,8 +45,14 @@ echo "✅ Listo."
 echo "   VNC  → vnc://HOST:5900  (pass: ${VNC_PASSWORD:-scraper})"
 echo "   CDP  → ws://HOST:9222"
 
+# Lanza el programador mensual de Holded en background
+if [ -f /app/holded_invoice.py ]; then
+  echo "📥 Iniciando descarga mensual de factura Holded..."
+  python /app/holded_invoice.py >> /app/data/holded_invoice.log 2>&1 &
+fi
+
 # Lanza tu scraper en background
-python api.py &
+python /app/api.py &
 API_PID=$!
 
 # Mantener el contenedor corriendo y esperar a que termine algún proceso
