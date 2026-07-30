@@ -5,7 +5,8 @@ echo "🚀 Iniciando infraestructura scraper..."
 # Limpiar locks de X y Chrome previos
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
 killall -9 google-chrome chrome chromium 2>/dev/null || true
-find /app/data/chrome_profile -type f \( -name "SingletonLock" -o -name "SingletonSocket" -o -name "SingletonCookie" \) -delete 2>/dev/null || true
+find /app/data/chrome_profile -maxdepth 2 -type f \( -name "SingletonLock" -o -name "SingletonSocket" -o -name "SingletonCookie" \) -delete 2>/dev/null || true
+rm -rf /app/data/chrome_profile/Default/Service\ Worker/ScriptCache 2>/dev/null || true
 sleep 1
 
 # Xvfb - display virtual

@@ -33,13 +33,13 @@ def required_env(key: str) -> str:
     return value
 
 
-def build_driver(download_dir: str, headless: bool = False) -> uc.Chrome:
+def build_driver(download_dir: str, user_data_dir: str, headless: bool = False) -> uc.Chrome:
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument(f"--user-data-dir={USER_DATA_DIR}")
+    options.add_argument(f"--user-data-dir={user_data_dir}")
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-background-networking")
     options.add_argument("--disable-sync")
@@ -47,6 +47,7 @@ def build_driver(download_dir: str, headless: bool = False) -> uc.Chrome:
     options.add_argument("--disable-default-apps")
     options.add_argument("--disable-popup-blocking")
     options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--remote-debugging-port=0")
     if headless:
         options.add_argument("--headless=new")
 
@@ -181,11 +182,12 @@ def download_invoice() -> None:
     headless = get_env("HOLDED_HEADLESS", "false").lower() in ("1", "true", "yes")
 
     os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-    if os.path.exists(USER_DATA_DIR):
-        shutil.rmtree(USER_DATA_DIR, ignore_errors=True)
-    os.makedirs(USER_DATA_DIR, exist_ok=True)
+    user_data_dir = f"{USER_DATA_DIR}_{int(time.time())}"
+    if os.path.exists(user_data_dir):
+        shutil.rmtree(user_data_dir, ignore_errors=True)
+    os.makedirs(user_data_dir, exist_ok=True)
 
-    driver = build_driver(DOWNLOAD_FOLDER, headless=headless)
+    driver = build_driver(DOWNLOAD_FOLDER, user_data_dir=user_data_dir, headless=headless)
     try:
         login(driver, email, password, otp)
         if download_invoice_from_holded(driver):
@@ -204,7 +206,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 12, 12)
+            candidate = datetime(year, month, 30, 13, 5)
             if candidate > now:
                 return candidate
         month += 1

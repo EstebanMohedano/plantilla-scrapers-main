@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile.scrapers
     container_name: scraper
     ports:
-      - "5901:5900"   # VNC
+      - "5900:5900"   # VNC
       - "9222:9222"   # Chrome DevTools Protocol
     environment:
       - VNC_PASSWORD=scraper
