@@ -25,6 +25,9 @@ sleep 1
 
 # Chrome con CDP
 echo "🌐 Chrome CDP en :9223 ..."
+export DBUS_SESSION_BUS_ADDRESS=/dev/null
+export XDG_RUNTIME_DIR=/tmp/xdg-runtime
+mkdir -p "$XDG_RUNTIME_DIR"
 DISPLAY=:99 google-chrome-stable \
   --no-sandbox \
   --disable-gpu \
@@ -34,9 +37,10 @@ DISPLAY=:99 google-chrome-stable \
   --user-data-dir=/app/data/chrome_profile \
   --no-first-run \
   --disable-default-apps \
+  --disable-features=AudioServiceOutOfProcess,MediaSessionService \
   --mute-audio \
   --window-size=1920,1080 \
-  about:blank &
+  about:blank &>/dev/null &
 sleep 3
 
 # Proxy socat: 9222 → 9223 (expone CDP al exterior)
