@@ -109,6 +109,17 @@ def safe_click(driver, element):
         return False
 
 
+def set_download_folder(driver, download_dir: str) -> None:
+    try:
+        driver.execute_cdp_cmd(
+            "Page.setDownloadBehavior",
+            {"behavior": "allow", "downloadPath": download_dir},
+        )
+        logger.info("Configurado directorio de descarga: %s", download_dir)
+    except Exception as exc:
+        logger.warning("No se pudo configurar el directorio de descarga por CDP: %s", exc)
+
+
 def accept_cookies(driver, timeout: int = 10) -> bool:
     cookie_texts = [
         "aceptar cookies",
@@ -304,6 +315,7 @@ def download_invoice() -> None:
         use_existing_chrome=not headless,
         debugger_address="127.0.0.1:9223",
     )
+    set_download_folder(driver, DOWNLOAD_FOLDER)
     try:
         if not is_already_logged_in(driver):
             logger.info("No hay sesión activa. Iniciando login de Holded...")
@@ -330,7 +342,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 30:
-            candidate = datetime(year, month, 30, 18, 35)
+            candidate = datetime(year, month, 30, 19, 15)
             if candidate > now:
                 return candidate
         month += 1
@@ -343,7 +355,7 @@ def should_run_today() -> bool:
     now = datetime.now()
     if now.day != 30:
         return False
-    if now.hour < 17 or (now.hour == 17 and now.minute < 40):
+    if now.hour < 19 or (now.hour == 19 and now.minute < 15):
         return False
     last_run = load_last_run_date()
     return last_run != now.date()
