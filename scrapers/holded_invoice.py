@@ -7,7 +7,11 @@ from datetime import date, datetime
 from typing import Optional
 
 import undetected_chromedriver as uc
-from selenium.common.exceptions import ElementClickInterceptedException, TimeoutException
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    StaleElementReferenceException,
+    TimeoutException,
+)
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
@@ -21,6 +25,71 @@ HOLDEN_INVOICES_URL = "https://app.holded.com/sales/revenue#settings:/subscripti
 DOWNLOAD_FOLDER = "/app/data/holded_downloads"
 USER_DATA_DIR = "/app/data/holded_user_data"
 LAST_RUN_FILE = "/app/data/holded_invoice_last_run.txt"
+DEBUG_FOLDER = "/app/data/holded_debug"
+
+# Botones de aceptación de los gestores de consentimiento más habituales.
+# Se prueban antes que la búsqueda por texto porque son inequívocos.
+COOKIE_BUTTON_SELECTORS = [
+    "#onetrust-accept-btn-handler",
+    "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
+    "#CybotCookiebotDialogBodyButtonAccept",
+    "#didomi-notice-agree-button",
+    "button[data-testid='uc-accept-all-button']",
+    ".cky-btn-accept",
+    ".osano-cm-accept-all",
+    "#cookiescript_accept",
+    "#truste-consent-button",
+    "#hs-eu-confirmation-button",
+    ".cc-btn.cc-allow",
+    "[data-cookiebanner='accept_button']",
+    "button[aria-label*='ceptar' i]",
+    "button[aria-label*='ccept' i]",
+]
+
+# Textos que deben coincidir de forma exacta: son tan cortos que como subcadena
+# producen falsos positivos (p. ej. "ok" está dentro de "cookies").
+COOKIE_TEXTS_EXACT = [
+    "aceptar",
+    "accept",
+    "aceptar y cerrar",
+    "entendido",
+    "got it",
+    "de acuerdo",
+    "ok",
+    "vale",
+]
+
+# Textos suficientemente largos como para buscarlos por subcadena.
+COOKIE_TEXTS_CONTAINS = [
+    "aceptar todas las cookies",
+    "aceptar todas",
+    "aceptar cookies",
+    "aceptar todo",
+    "permitir todas",
+    "permitir todo",
+    "accept all cookies",
+    "accept all",
+    "allow all cookies",
+    "allow all",
+    "allow cookies",
+    "i agree",
+    "estoy de acuerdo",
+]
+
+# Contenedores típicos de un aviso de cookies, usados para saber si queda banner.
+COOKIE_BANNER_SELECTORS = [
+    "#onetrust-banner-sdk",
+    "#CybotCookiebotDialog",
+    "#didomi-notice",
+    ".cky-consent-container",
+    ".osano-cm-window",
+    "#cookiescript_injected",
+    ".cc-window",
+    "[id*='cookie' i]",
+    "[class*='cookie' i]",
+    "[id*='consent' i]",
+    "[class*='consent' i]",
+]
 
 
 def get_env(key: str, default: Optional[str] = None) -> Optional[str]:
@@ -129,82 +198,519 @@ def set_download_folder(driver, download_dir: str) -> None:
         logger.warning("No se pudo configurar el directorio de descarga por CDP: %s", exc)
 
 
-def accept_cookies(driver, timeout: int = 10) -> bool:
-    cookie_texts = [
-        "aceptar cookies",
-        "aceptar todo",
-        "permitir todo",
-        "aceptar",
-        "accept cookies",
-        "accept all",
-        "allow cookies",
-        "allow all",
-        "ok",
-        "cerrar",
-        "got it",
-        "understood",
-    ]
-    extra_xpaths = [
-        "//button[contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept') or contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'cookie') or contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'allow')]",
-        "//button[contains(translate(@class, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept') or contains(translate(@class, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'cookie') or contains(translate(@class, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'allow')]",
-        "//div[contains(translate(@class, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'cookie') and (contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'aceptar') or contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept'))]//button",
+def _xpath_lower(expr: str) -> str:
+    return (
+        "translate(normalize-space(%s), "
+        "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜÑ', "
+        "'abcdefghijklmnopqrstuvwxyzáéíóúüñ')" % expr
+    )
+
+
+def _text_xpaths(text: str, exact: bool) -> list:
+    """XPaths para un texto de botón, restringidos a elementos realmente clicables.
+
+    El segundo XPath admite span/div/label, pero solo si son hojas con texto corto:
+    así se evita clicar el contenedor entero de la página (que también "contiene"
+    el texto y cuyo click no hace nada).
+    """
+    labels = [_xpath_lower("."), _xpath_lower("@aria-label"), _xpath_lower("@value"), _xpath_lower("@title")]
+    if exact:
+        cond = " or ".join("%s = '%s'" % (label, text) for label in labels)
+    else:
+        cond = " or ".join("contains(%s, '%s')" % (label, text) for label in labels)
+    clickable = "self::button or self::a or self::input or @role='button' or @onclick"
+    leafish = "self::span or self::div or self::p or self::label"
+    return [
+        "//*[%s][%s]" % (clickable, cond),
+        "//*[%s][not(*)][string-length(normalize-space(.)) < 40][%s]" % (leafish, cond),
     ]
 
-    for text in cookie_texts:
-        xpath = (
-            "//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" + text.lower() + "')]"
-            " | //a[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" + text.lower() + "')]"
-            " | //span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" + text.lower() + "')]"
-            " | //div[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" + text.lower() + "')]"
-        )
-        elements = driver.find_elements(By.XPATH, xpath)
-        for element in elements:
-            if safe_click(driver, element):
-                logger.info("Aceptadas cookies / cerrado modal con texto %r", text)
-                time.sleep(2)
-                return True
 
-    for xpath in extra_xpaths:
+def _is_interactable(element) -> bool:
+    try:
+        return element.is_displayed() and element.is_enabled()
+    except Exception:
+        return False
+
+
+def _element_dismissed(element, timeout: float = 4.0) -> bool:
+    """True si el elemento desaparece tras el click (señal de que sí se aceptó)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
         try:
-            element = WebDriverWait(driver, timeout).until(
-                EC.element_to_be_clickable((By.XPATH, xpath))
-            )
-            if safe_click(driver, element):
-                logger.info("Aceptadas cookies / cerrado modal por xpath adicional %r", xpath)
-                time.sleep(2)
+            if not element.is_displayed():
                 return True
-        except TimeoutException:
-            continue
-
+        except StaleElementReferenceException:
+            return True
+        except Exception:
+            return True
+        time.sleep(0.25)
     return False
+
+
+def _click_consent(driver, element, description: str) -> bool:
+    if not _is_interactable(element):
+        return False
+    if not safe_click(driver, element):
+        return False
+    if not _element_dismissed(element):
+        logger.debug("Click en %s no hizo desaparecer el aviso; sigo buscando.", description)
+        return False
+    logger.info("Aceptadas cookies mediante %s", description)
+    time.sleep(1.5)
+    return True
+
+
+def _accept_in_current_context(driver, where: str) -> bool:
+    for selector in COOKIE_BUTTON_SELECTORS:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        except Exception:
+            continue
+        for element in elements:
+            if _click_consent(driver, element, "selector %r (%s)" % (selector, where)):
+                return True
+
+    for text, exact in [(t, True) for t in COOKIE_TEXTS_EXACT] + [(t, False) for t in COOKIE_TEXTS_CONTAINS]:
+        for xpath in _text_xpaths(text.lower(), exact):
+            try:
+                elements = driver.find_elements(By.XPATH, xpath)
+            except Exception:
+                continue
+            for element in elements:
+                if _click_consent(driver, element, "texto %r (%s)" % (text, where)):
+                    return True
+    return False
+
+
+def _accept_in_iframes(driver) -> bool:
+    """Muchos CMP (Cookiebot, TrustArc...) pintan el aviso dentro de un iframe."""
+    try:
+        frames = driver.find_elements(By.CSS_SELECTOR, "iframe")
+    except Exception:
+        return False
+    for index, frame in enumerate(frames):
+        try:
+            driver.switch_to.frame(frame)
+        except Exception:
+            continue
+        try:
+            if _accept_in_current_context(driver, "iframe #%d" % index):
+                return True
+        finally:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+    return False
+
+
+_SHADOW_CLICK_JS = r"""
+const texts = arguments[0];
+const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+const visible = (el) => {
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0;
+};
+const nodes = [];
+const walk = (root) => {
+  for (const el of root.querySelectorAll('*')) {
+    nodes.push(el);
+    if (el.shadowRoot) walk(el.shadowRoot);
+  }
+};
+walk(document);
+for (const t of texts) {
+  for (const el of nodes) {
+    const tag = el.tagName.toLowerCase();
+    if (!(tag === 'button' || tag === 'a' || tag === 'input' || el.getAttribute('role') === 'button')) continue;
+    const label = norm(el.innerText || el.textContent || el.value || el.getAttribute('aria-label'));
+    if (label && label.indexOf(t) !== -1 && visible(el)) { el.click(); return t; }
+  }
+}
+return null;
+"""
+
+
+def _accept_in_shadow_dom(driver) -> bool:
+    """Usercentrics y similares viven en un shadow root, invisible para XPath."""
+    texts = [t.lower() for t in COOKIE_TEXTS_CONTAINS]
+    try:
+        matched = driver.execute_script(_SHADOW_CLICK_JS, texts)
+    except Exception as exc:
+        logger.debug("No se pudo recorrer el shadow DOM: %s", exc)
+        return False
+    if matched:
+        logger.info("Aceptadas cookies en shadow DOM con el texto %r", matched)
+        time.sleep(1.5)
+        return True
+    return False
+
+
+_BANNER_PRESENT_JS = r"""
+const selectors = arguments[0];
+for (const sel of selectors) {
+  let els;
+  try { els = document.querySelectorAll(sel); } catch (e) { continue; }
+  for (const el of els) {
+    const r = el.getBoundingClientRect();
+    if (r.width < 100 || r.height < 40) continue;
+    const style = window.getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.display === 'none' || style.opacity === '0') continue;
+    const text = (el.innerText || '').toLowerCase();
+    if (text.indexOf('cookie') !== -1 || text.indexOf('consent') !== -1 || text.indexOf('consentimiento') !== -1) {
+      return sel;
+    }
+  }
+}
+return null;
+"""
+
+
+def _consent_banner_present(driver) -> Optional[str]:
+    try:
+        return driver.execute_script(_BANNER_PRESENT_JS, COOKIE_BANNER_SELECTORS)
+    except Exception:
+        return None
+
+
+def save_debug_snapshot(driver, name: str) -> None:
+    """Guarda captura + HTML para poder ver qué aviso quedó sin aceptar."""
+    try:
+        os.makedirs(DEBUG_FOLDER, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        png_path = os.path.join(DEBUG_FOLDER, "%s-%s.png" % (name, stamp))
+        html_path = os.path.join(DEBUG_FOLDER, "%s-%s.html" % (name, stamp))
+        driver.save_screenshot(png_path)
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
+        logger.info("Guardado diagnóstico en %s y %s", png_path, html_path)
+    except Exception as exc:
+        logger.debug("No se pudo guardar el diagnóstico %s: %s", name, exc)
+
+
+def accept_cookies(driver, timeout: int = 20) -> bool:
+    """Acepta el aviso de cookies. Reintenta porque el banner se inyecta por JS.
+
+    Devuelve True si se aceptó (o si no había nada que aceptar) y False si
+    quedó un aviso visible sin poder cerrarlo.
+    """
+    deadline = time.time() + timeout
+    banner_seen = False
+
+    while time.time() < deadline:
+        banner = _consent_banner_present(driver)
+        banner_seen = banner_seen or bool(banner)
+
+        if _accept_in_current_context(driver, "documento principal"):
+            return True
+        if _accept_in_shadow_dom(driver):
+            return True
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+        if _accept_in_iframes(driver):
+            return True
+
+        if banner_seen and not _consent_banner_present(driver):
+            logger.info("El aviso de cookies ya no está visible.")
+            return True
+
+        time.sleep(1)
+
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    if not banner_seen:
+        logger.info("No se detectó ningún aviso de cookies; continúo.")
+        return True
+
+    logger.warning("Hay un aviso de cookies visible que no se pudo aceptar.")
+    save_debug_snapshot(driver, "cookies")
+    return False
+
+
+def find_element_by_text(driver, text_values: list):
+    """Primer elemento clicable y visible cuyo texto contenga alguno de los valores.
+
+    Usa los mismos XPaths acotados que el aviso de cookies: nunca devuelve un
+    contenedor envolvente que se limita a *contener* el texto.
+    """
+    for text in text_values:
+        for xpath in _text_xpaths(text.lower(), exact=False):
+            try:
+                elements = driver.find_elements(By.XPATH, xpath)
+            except Exception:
+                continue
+            for element in elements:
+                if _is_interactable(element):
+                    return element, text
+    return None, None
 
 
 def find_and_click(driver, text_values: list, timeout: int = 20) -> bool:
-    for text in text_values:
-        xpath = (
-            "//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" \
-            + text.lower()
-            + "')]"
-            " | //a[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '"
-            + text.lower()
-            + "')]"
-            " | //span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '"
-            + text.lower()
-            + "')]"
-            " | //div[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '"
-            + text.lower()
-            + "')]")
+    deadline = time.time() + timeout
+    while True:
+        element, text = find_element_by_text(driver, text_values)
+        if element is not None and safe_click(driver, element):
+            logger.info("Clicado elemento con texto %r", text)
+            return True
+        if time.time() >= deadline:
+            logger.debug("No se encontró ningún elemento clicable de %r", text_values)
+            return False
+        time.sleep(1)
+
+
+GOOGLE_BUTTON_TEXTS = [
+    "continuar con google",
+    "iniciar sesión con google",
+    "acceder con google",
+    "entrar con google",
+    "ingresar con google",
+    "continue with google",
+    "sign in with google",
+    "log in with google",
+]
+
+
+def click_google_button(driver, timeout: int = 12) -> bool:
+    """Pulsa el botón de 'Continuar con Google' de Holded.
+
+    El botón puede ser nativo o el widget de Google Identity Services, que se
+    renderiza dentro de un iframe de accounts.google.com.
+    """
+    if find_and_click(driver, GOOGLE_BUTTON_TEXTS, timeout=timeout):
+        return True
+
+    frame_selectors = (
+        "iframe[src*='accounts.google.com'], iframe[id^='gsi_'], "
+        "iframe[title*='Google' i], iframe[src*='gsi/button']"
+    )
+    try:
+        frames = driver.find_elements(By.CSS_SELECTOR, frame_selectors)
+    except Exception:
+        frames = []
+    for index, frame in enumerate(frames):
         try:
-            element = WebDriverWait(driver, timeout).until(
-                EC.element_to_be_clickable((By.XPATH, xpath))
-            )
-            if safe_click(driver, element):
-                logger.info("Clicado elemento con texto %r", text)
+            driver.switch_to.frame(frame)
+        except Exception:
+            continue
+        try:
+            if find_and_click(driver, GOOGLE_BUTTON_TEXTS + ["google"], timeout=3):
+                logger.info("Botón de Google pulsado dentro del iframe #%d", index)
                 return True
-            logger.debug("No se pudo hacer click en elemento con texto %r", text)
-        except TimeoutException:
-            logger.debug("No se encontró elemento con texto %r", text)
+        finally:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+
+    # Último recurso: enlaces cuyo destino ya es el propio flujo OAuth de Google.
+    try:
+        links = driver.find_elements(
+            By.CSS_SELECTOR,
+            "a[href*='accounts.google.com'], a[href*='/auth/google'], "
+            "button[class*='google' i], div[class*='google' i][role='button']",
+        )
+    except Exception:
+        links = []
+    for link in links:
+        if _is_interactable(link) and safe_click(driver, link):
+            logger.info("Pulsado enlace/botón de Google por selector CSS.")
+            return True
+
     return False
+
+
+def _switch_to_google_context(driver, original_handle: str, timeout: int = 20) -> bool:
+    """Si el SSO abre una ventana emergente, pasa a ella. True si vemos Google."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            handles = driver.window_handles
+        except Exception:
+            return False
+        for handle in handles:
+            try:
+                driver.switch_to.window(handle)
+                if "accounts.google.com" in driver.current_url.lower():
+                    if handle != original_handle:
+                        logger.info("El SSO de Google se abrió en una ventana emergente.")
+                    return True
+            except Exception:
+                continue
+        try:
+            driver.switch_to.window(original_handle)
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def _fill_google_field(driver, element, value: str) -> None:
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+    except Exception:
+        pass
+    element.click()
+    element.clear()
+    element.send_keys(value)
+
+
+def _google_next(driver, fallback_element) -> None:
+    """Pulsa 'Siguiente'; si no aparece el botón, envía ENTER en el campo."""
+    for selector in ("#identifierNext button", "#passwordNext button", "#identifierNext", "#passwordNext"):
+        try:
+            buttons = driver.find_elements(By.CSS_SELECTOR, selector)
+        except Exception:
+            continue
+        for button in buttons:
+            if _is_interactable(button) and safe_click(driver, button):
+                return
+    if find_and_click(driver, ["siguiente", "next"], timeout=3):
+        return
+    fallback_element.send_keys(Keys.ENTER)
+
+
+def _visible_element(driver, selector: str):
+    try:
+        for element in driver.find_elements(By.CSS_SELECTOR, selector):
+            if _is_interactable(element):
+                return element
+    except Exception:
+        pass
+    return None
+
+
+def complete_google_sso(driver, email: str, password: str, timeout: int = 150) -> bool:
+    """Recorre las pantallas de accounts.google.com hasta volver a Holded.
+
+    Es una máquina de estados en bucle porque Google encadena pantallas
+    distintas según la sesión previa: selector de cuenta, correo, contraseña y,
+    a veces, una pantalla de consentimiento.
+    """
+    deadline = time.time() + timeout
+    email_done = False
+    password_done = False
+
+    while time.time() < deadline:
+        try:
+            url = driver.current_url.lower()
+        except Exception:
+            time.sleep(1)
+            continue
+
+        if "app.holded.com" in url and "login" not in url:
+            logger.info("Login por Google completado; de vuelta en Holded.")
+            return True
+
+        if "accounts.google.com" not in url:
+            time.sleep(1)
+            continue
+
+        # Pantalla de "elige una cuenta": pulsamos directamente la del correo.
+        if not email_done:
+            account_xpath = (
+                "//*[@data-identifier='%s']"
+                " | //*[contains(normalize-space(.), '%s')][not(*)]" % (email, email)
+            )
+            try:
+                tiles = driver.find_elements(By.XPATH, account_xpath)
+            except Exception:
+                tiles = []
+            for tile in tiles:
+                if _is_interactable(tile) and safe_click(driver, tile):
+                    logger.info("Seleccionada la cuenta %s en el selector de Google.", email)
+                    email_done = True
+                    time.sleep(3)
+                    break
+            if email_done:
+                continue
+
+        email_input = _visible_element(driver, "input[type='email'], input#identifierId, input[name='identifier']")
+        if email_input is not None and not email_done:
+            logger.info("Introduciendo el correo en Google...")
+            _fill_google_field(driver, email_input, email)
+            _google_next(driver, email_input)
+            email_done = True
+            time.sleep(3)
+            continue
+
+        password_input = _visible_element(driver, "input[type='password'], input[name='Passwd'], input[name='password']")
+        if password_input is not None and not password_done:
+            logger.info("Introduciendo la contraseña en Google...")
+            _fill_google_field(driver, password_input, password)
+            _google_next(driver, password_input)
+            password_done = True
+            time.sleep(5)
+            continue
+
+        # Selector de cuenta sin la nuestra: pedimos entrar con otra.
+        if not email_done and find_and_click(
+            driver, ["usar otra cuenta", "use another account", "añadir otra cuenta"], timeout=2
+        ):
+            logger.info("La cuenta no estaba en el selector; pido 'usar otra cuenta'.")
+            time.sleep(2)
+            continue
+
+        # Pantalla de consentimiento / "¿Continuar con Holded?".
+        if find_and_click(driver, ["continuar", "continue", "permitir", "allow", "aceptar todo"], timeout=2):
+            logger.info("Aceptada la pantalla de consentimiento de Google.")
+            time.sleep(3)
+            continue
+
+        if any(token in url for token in ("challenge", "signin/rejected", "deniedsigninrejected", "speedbump")):
+            logger.warning(
+                "Google ha pedido una verificación adicional (2FA o bloqueo por navegador "
+                "automatizado). Complétala manualmente por VNC: la sesión queda guardada "
+                "en el perfil de Chrome y las siguientes ejecuciones no la pedirán."
+            )
+            save_debug_snapshot(driver, "google-challenge")
+            return False
+
+        time.sleep(1)
+
+    logger.warning("Se agotó el tiempo esperando a que Google devolviera el control a Holded.")
+    save_debug_snapshot(driver, "google-timeout")
+    return False
+
+
+def google_login(driver, email: str, password: str) -> bool:
+    try:
+        original_handle = driver.current_window_handle
+    except Exception:
+        original_handle = None
+
+    if not click_google_button(driver):
+        logger.info("No se encontró el botón de 'Continuar con Google'.")
+        return False
+
+    logger.info("Pulsado 'Continuar con Google'; esperando a accounts.google.com...")
+    time.sleep(3)
+
+    if original_handle and not _switch_to_google_context(driver, original_handle):
+        # Puede que Google reutilizara la sesión y ya estemos dentro de Holded.
+        if "app.holded.com" in driver.current_url.lower() and "login" not in driver.current_url.lower():
+            logger.info("Google reutilizó la sesión existente; ya estamos dentro de Holded.")
+            return True
+        logger.warning("Tras pulsar el botón de Google no se abrió accounts.google.com.")
+        save_debug_snapshot(driver, "google-no-redirect")
+        return False
+
+    accept_cookies(driver, timeout=8)
+    ok = complete_google_sso(driver, email, password)
+
+    # Si el SSO usó una ventana emergente, esta se cierra al terminar.
+    if original_handle:
+        try:
+            if original_handle in driver.window_handles:
+                driver.switch_to.window(original_handle)
+        except Exception:
+            pass
+    return ok
 
 
 def is_already_logged_in(driver) -> bool:
@@ -216,18 +722,33 @@ def is_already_logged_in(driver) -> bool:
     return True
 
 
-def login(driver, email: str, password: str, otp: Optional[str] = None) -> None:
+def login(
+    driver,
+    email: str,
+    password: str,
+    otp: Optional[str] = None,
+    google_email: Optional[str] = None,
+    google_password: Optional[str] = None,
+) -> None:
     logger.info("Entrando en Holded...")
     driver.get(HOLDEN_LOGIN_URL)
     wait_for_page_ready(driver, timeout=30)
     accept_cookies(driver)
 
-    if find_and_click(driver, ["continuar con google", "iniciar sesión con google", "sign in with google", "continue with google", "ingresar con google", "google"]):
-        logger.info("Intentando login por Google SSO...")
-        time.sleep(8)
-        WebDriverWait(driver, 30).until(lambda d: "login" not in d.current_url.lower() or "accounts.google.com" in d.current_url.lower())
-        logger.info("Login por Google completado.")
-        return
+    if google_email and google_password:
+        if google_login(driver, google_email, google_password):
+            return
+        logger.warning("El login por Google no prosperó; intento el formulario de Holded.")
+        driver.get(HOLDEN_LOGIN_URL)
+        wait_for_page_ready(driver, timeout=30)
+        accept_cookies(driver, timeout=8)
+    else:
+        logger.info("Sin credenciales de Google (GOOGLE_EMAIL/GOOGLE_PASSWORD); uso el formulario de Holded.")
+
+    if not email or not password:
+        raise RuntimeError(
+            "No se pudo entrar por Google y no hay HOLDED_EMAIL/HOLDED_PASSWORD para el formulario."
+        )
 
     login_button = find_and_click(driver, ["iniciar sesión", "login", "sign in", "entrar"])
     if login_button:
@@ -351,6 +872,8 @@ def download_invoice() -> None:
     email = get_env("HOLDED_EMAIL")
     password = get_env("HOLDED_PASSWORD")
     otp = get_env("HOLDED_OTP")
+    google_email = get_env("GOOGLE_EMAIL")
+    google_password = get_env("GOOGLE_PASSWORD")
     headless = get_env("HOLDED_HEADLESS", "false").lower() in ("1", "true", "yes")
 
     os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
@@ -377,9 +900,12 @@ def download_invoice() -> None:
     try:
         if not is_already_logged_in(driver):
             logger.info("No hay sesión activa. Iniciando login de Holded...")
-            if not email or not password:
-                raise RuntimeError("No hay sesión activa y faltan HOLDED_EMAIL/HOLDED_PASSWORD.")
-            login(driver, email, password, otp)
+            if not (google_email and google_password) and not (email and password):
+                raise RuntimeError(
+                    "No hay sesión activa y faltan credenciales "
+                    "(GOOGLE_EMAIL/GOOGLE_PASSWORD o HOLDED_EMAIL/HOLDED_PASSWORD)."
+                )
+            login(driver, email, password, otp, google_email, google_password)
         else:
             logger.info("Sesión Holded ya activa, saltando login.")
 
@@ -400,7 +926,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 6:
-            candidate = datetime(year, month, 6, 11, 45)
+            candidate = datetime(year, month, 6, 12, 4)
             if candidate > now:
                 return candidate
         month += 1
@@ -413,7 +939,7 @@ def should_run_today() -> bool:
     now = datetime.now()
     if now.day != 6:
         return False
-    if now.hour < 11 or (now.hour == 11 and now.minute < 45):
+    if now.hour < 12 or (now.hour == 12 and now.minute < 4):
         return False
     last_run = load_last_run_date()
     return last_run != now.date()

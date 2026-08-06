@@ -57,13 +57,15 @@ docker compose down
 - Modifica `scrapers/api.py` con tu lógica de scraping.
 - Modifica `scrapers/holded_invoice.py` si necesitas adaptar la navegación a tu cuenta de Holded.
 - Añade dependencias en `scrapers/requirements.txt`.
-- Cambia variables de entorno en `docker-compose.yml` si necesitas otro `VNC_PASSWORD` o tus credenciales Holded.
+- Las credenciales van en el archivo `.env` de la raíz (ignorado por git); `docker-compose.yml` las lee de ahí.
 
 ## Variables importantes
 
-- `VNC_PASSWORD` - contraseña del servidor VNC. Se puede configurar en `docker-compose.yml`.
-- `HOLDED_EMAIL` - correo electrónico de acceso a Holded.
-- `HOLDED_PASSWORD` - contraseña de Holded.
+- `VNC_PASSWORD` - contraseña del servidor VNC.
+- `GOOGLE_EMAIL` - cuenta de Google usada para el SSO de Holded ("Continuar con Google").
+- `GOOGLE_PASSWORD` - contraseña de esa cuenta de Google.
+- `HOLDED_EMAIL` - correo del formulario clásico de Holded (solo se usa si falla el SSO).
+- `HOLDED_PASSWORD` - contraseña del formulario clásico de Holded.
 - `HOLDED_OTP` - código OTP opcional si tu cuenta requiere verificación adicional.
 - `HOLDED_HEADLESS` - `true` para ejecutar Chrome en modo headless dentro del contenedor.
 
