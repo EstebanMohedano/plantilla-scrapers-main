@@ -19,6 +19,7 @@ services:
       - HOLDED_PASSWORD=${HOLDED_PASSWORD:-}
       - HOLDED_OTP=${HOLDED_OTP:-}
       - HOLDED_HEADLESS=${HOLDED_HEADLESS:-false}
+      - HOLDED_KEEP_OPEN_SECONDS=${HOLDED_KEEP_OPEN_SECONDS:-0}
     volumes:
       - ./data:/app/data       # datos persistentes (cookies, perfiles, outputs)
     shm_size: 2gb

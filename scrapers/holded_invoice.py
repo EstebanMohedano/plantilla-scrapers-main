@@ -389,6 +389,58 @@ def save_debug_snapshot(driver, name: str) -> None:
         logger.debug("No se pudo guardar el diagnóstico %s: %s", name, exc)
 
 
+_BRUTE_ACCEPT_JS = r"""
+const phrases = arguments[0];
+const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+const nodes = Array.from(document.querySelectorAll('*')).reverse();  // más profundos primero
+for (const phrase of phrases) {
+  for (const el of nodes) {
+    if (el.children.length > 3) continue;
+    const text = norm(el.innerText || el.textContent);
+    if (!text || text.length > 40) continue;
+    if (text.indexOf(phrase) === -1) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) continue;
+    // Algunos banners registran el handler en un ancestro (React/Vue),
+    // así que clicamos también hacia arriba unos niveles.
+    let node = el;
+    for (let i = 0; i < 4 && node; i++) {
+      try { node.click(); } catch (e) {}
+      node = node.parentElement;
+    }
+    return text;
+  }
+}
+return null;
+"""
+
+
+def _brute_force_accept(driver) -> bool:
+    """Último recurso: clicar por JS el nodo visible cuyo texto sea 'aceptar todo'.
+
+    Cubre banners cuyo botón no es button/a/[role=button] y cuyo manejador de
+    click cuelga de un ancestro, que es lo que no alcanzan los XPaths.
+    """
+    phrases = [t.lower() for t in COOKIE_TEXTS_CONTAINS] + ["aceptar", "accept"]
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+    try:
+        matched = driver.execute_script(_BRUTE_ACCEPT_JS, phrases)
+    except Exception as exc:
+        logger.debug("Falló el intento por fuerza bruta: %s", exc)
+        return False
+    if not matched:
+        return False
+    time.sleep(2)
+    if _consent_banner_present(driver):
+        logger.debug("Clicado %r por fuerza bruta pero el aviso sigue visible.", matched)
+        return False
+    logger.info("Aceptadas cookies por fuerza bruta sobre el texto %r", matched)
+    return True
+
+
 def accept_cookies(driver, timeout: int = 20) -> bool:
     """Acepta el aviso de cookies. Reintenta porque el banner se inyecta por JS.
 
@@ -426,6 +478,10 @@ def accept_cookies(driver, timeout: int = 20) -> bool:
 
     if not banner_seen:
         logger.info("No se detectó ningún aviso de cookies; continúo.")
+        return True
+
+    logger.info("Los métodos normales no aceptaron el aviso; pruebo por fuerza bruta.")
+    if _brute_force_accept(driver):
         return True
 
     logger.warning("Hay un aviso de cookies visible que no se pudo aceptar.")
@@ -915,6 +971,18 @@ def download_invoice() -> None:
         else:
             raise RuntimeError("No se pudo descargar la factura del mes.")
         time.sleep(10)
+    except Exception:
+        # Dejar rastro antes de cerrar: si no, el navegador desaparece y no se
+        # puede ver en qué pantalla se quedó.
+        save_debug_snapshot(driver, "error")
+        keep_open = int(get_env("HOLDED_KEEP_OPEN_SECONDS", "0") or 0)
+        if keep_open > 0:
+            logger.warning(
+                "Fallo en la ejecución. Dejo el navegador abierto %d s para inspeccionarlo por VNC.",
+                keep_open,
+            )
+            time.sleep(keep_open)
+        raise
     finally:
         driver.quit()
 
@@ -926,7 +994,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 6:
-            candidate = datetime(year, month, 6, 12, 28)
+            candidate = datetime(year, month, 6, 12, 41)
             if candidate > now:
                 return candidate
         month += 1
@@ -939,7 +1007,7 @@ def should_run_today() -> bool:
     now = datetime.now()
     if now.day != 6:
         return False
-    if now.hour < 12 or (now.hour == 12 and now.minute < 28):
+    if now.hour < 12 or (now.hour == 12 and now.minute < 41):
         return False
     last_run = load_last_run_date()
     return last_run != now.date()
