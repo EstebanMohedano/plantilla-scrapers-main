@@ -1,11 +1,13 @@
 import calendar
 import logging
 import os
+import re
 import shutil
 import time
 from datetime import date, datetime
 from typing import Optional
 
+import requests
 import undetected_chromedriver as uc
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
@@ -22,7 +24,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 HOLDEN_LOGIN_URL = "https://app.holded.com/login"
 HOLDEN_INVOICES_URL = "https://app.holded.com/sales/revenue#settings:/subscription/invoices"
-DOWNLOAD_FOLDER = "/app/data/holded_downloads"
+HOLDEN_REVENUE_URL = "https://app.holded.com/sales/revenue"
+# Las facturas del plan viven en un drawer que la SPA monta desde el fragmento
+# de la URL, no en una página propia.
+SUBSCRIPTION_HASH = "settings:/subscription/invoices"
+SUBSCRIPTION_PANEL_TEXT = "facturas de tu plan"
+# Carpeta donde queda el PDF. Se puede apuntar a una carpeta sincronizada con
+# Drive (rclone, Drive para escritorio...) vía HOLDED_DOWNLOAD_DIR.
+DOWNLOAD_FOLDER = os.getenv("HOLDED_DOWNLOAD_DIR", "/app/data/holded_downloads").strip() or "/app/data/holded_downloads"
 USER_DATA_DIR = "/app/data/holded_user_data"
 LAST_RUN_FILE = "/app/data/holded_invoice_last_run.txt"
 DEBUG_FOLDER = "/app/data/holded_debug"
@@ -847,66 +856,174 @@ def login(
     logger.info("Login completado con éxito.")
 
 
+def subscription_panel_open(driver) -> bool:
+    """True si el drawer de 'Facturas de tu plan Holded' está montado."""
+    try:
+        return bool(
+            driver.find_elements(
+                By.XPATH,
+                "//*[contains(%s, '%s')]" % (_xpath_lower("."), SUBSCRIPTION_PANEL_TEXT),
+            )
+        )
+    except Exception:
+        return False
+
+
+def open_subscription_drawer(driver, timeout: int = 30) -> bool:
+    """Abre el panel de facturas del plan forzando el cambio de fragmento.
+
+    Cargar la URL completa de una vez no basta: la SPA sólo monta el drawer al
+    recibir un `hashchange`, así que con el hash ya presente en la carga
+    inicial se queda en el listado de "Facturas de venta" de fondo.
+    """
+    try:
+        driver.execute_script(
+            "if (window.location.hash === '#' + arguments[0]) { window.location.hash = ''; }"
+            "window.location.hash = arguments[0];"
+            "window.dispatchEvent(new HashChangeEvent('hashchange', {newURL: window.location.href}));",
+            SUBSCRIPTION_HASH,
+        )
+    except Exception as exc:
+        logger.warning("No se pudo forzar el fragmento de suscripción: %s", exc)
+        return False
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if subscription_panel_open(driver):
+            logger.info("Panel de facturas de suscripción abierto.")
+            return True
+        time.sleep(1)
+    return False
+
+
 def navigate_to_invoices(driver) -> None:
     logger.info("Navegando a la página de facturas de Holded...")
-    driver.get(HOLDEN_INVOICES_URL)
+    driver.get(HOLDEN_REVENUE_URL)
     wait_for_page_ready(driver, timeout=30)
-    try:
-        WebDriverWait(driver, 30).until(
-            lambda d: "sales/revenue" in d.current_url.lower() or "subscription/invoices" in d.current_url.lower()
-        )
-    except TimeoutException:
-        logger.warning("No se cargó la URL directa de facturas; intento navegación alternativa.")
-        find_and_click(driver, ["facturas", "invoices", "ventas", "sales"])
-        time.sleep(5)
     accept_cookies(driver)
     time.sleep(3)
+
+    if open_subscription_drawer(driver):
+        return
+
+    # Plan B: recarga con el hash ya puesto. En una segunda carga sobre la
+    # misma ruta algunas versiones de la SPA sí lo procesan.
+    logger.warning("El drawer no se abrió al cambiar el fragmento; recargo con la URL completa.")
+    driver.get(HOLDEN_INVOICES_URL)
+    wait_for_page_ready(driver, timeout=30)
+    time.sleep(3)
+    if not subscription_panel_open(driver) and not open_subscription_drawer(driver, timeout=15):
+        logger.warning("No se pudo abrir el panel de facturas de suscripción.")
+        save_debug_snapshot(driver, "sin-panel-suscripcion")
+
+
+def _wait_for_new_window(driver, known_handles: set, timeout: int = 30) -> Optional[str]:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            for handle in driver.window_handles:
+                if handle not in known_handles:
+                    return handle
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return None
+
+
+def open_latest_invoice(driver) -> Optional[tuple]:
+    """Pulsa el estado 'Pagada' de la factura más reciente.
+
+    Holded abre el PDF en una ventana nueva. Nos quedamos con su URL y su
+    título (que es el número de factura) y la cerramos: el PDF se descarga
+    aparte, no desde el visor.
+    """
+    original = driver.current_window_handle
+    known = set(driver.window_handles)
+
+    if not find_and_click(driver, ["pagada", "paid"]):
+        logger.warning("No se encontró ninguna factura con estado 'Pagada'.")
+        save_debug_snapshot(driver, "sin-facturas")
+        return None
+
+    handle = _wait_for_new_window(driver, known)
+    if handle is None:
+        logger.warning("Al pulsar la factura no se abrió la ventana del PDF.")
+        save_debug_snapshot(driver, "sin-ventana-pdf")
+        return None
+
+    driver.switch_to.window(handle)
+    try:
+        url = driver.current_url
+        title = (driver.title or "").strip()
+    finally:
+        try:
+            driver.close()
+        except Exception:
+            pass
+        driver.switch_to.window(original)
+
+    logger.info("Factura más reciente: %s (%s)", title or "sin título", url)
+    return url, title
+
+
+def _invoice_filename(url: str, title: str) -> str:
+    """Nombre de fichero a partir del número de factura (título de la ventana)."""
+    number = re.sub(r"[^A-Za-z0-9_-]", "", title.split("-")[0].strip())
+    if not number:
+        number = re.sub(r"[^A-Za-z0-9_-]", "", url.rstrip("/").split("/")[-1])[:32]
+    return "%s.pdf" % (number or "factura-holded")
+
+
+def download_pdf_with_session(driver, url: str, filename: str) -> Optional[str]:
+    """Descarga el PDF reutilizando las cookies de la sesión del navegador.
+
+    Es más fiable que dejar que Chrome lo descargue: su visor integrado abre
+    los PDF en lugar de guardarlos, y las `prefs` de descarga no se aplican
+    cuando el driver se conecta a un Chrome ya lanzado en vez de arrancarlo.
+    """
+    session = requests.Session()
+    for cookie in driver.get_cookies():
+        session.cookies.set(
+            cookie["name"], cookie["value"], domain=cookie.get("domain"), path=cookie.get("path", "/")
+        )
+
+    headers = {}
+    try:
+        headers["User-Agent"] = driver.execute_script("return navigator.userAgent;")
+    except Exception:
+        pass
+
+    response = session.get(url, headers=headers, timeout=90)
+    response.raise_for_status()
+
+    content_type = response.headers.get("Content-Type", "")
+    if "pdf" not in content_type.lower() and not response.content.startswith(b"%PDF"):
+        logger.warning(
+            "La respuesta de %s no parece un PDF (Content-Type: %s). No la guardo.", url, content_type or "desconocido"
+        )
+        return None
+
+    os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+    path = os.path.join(DOWNLOAD_FOLDER, filename)
+    with open(path, "wb") as f:
+        f.write(response.content)
+    logger.info("Factura guardada en %s (%d KB)", path, len(response.content) // 1024)
+    return path
 
 
 def download_invoice_from_holded(driver) -> bool:
     navigate_to_invoices(driver)
 
-    if not find_and_click(driver, ["pagada", "paid"]):
-        logger.warning("No se encontró un botón 'Pagada'. Continúo de todas formas.")
-        time.sleep(3)
-
-    invoice_link = None
-    candidates = driver.find_elements(
-        By.XPATH,
-        "//a[contains(@href,'invoice') or contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'factura') or contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'invoice')]",
-    )
-    if candidates:
-        invoice_link = candidates[0]
-    else:
-        rows = driver.find_elements(By.XPATH, "//tr[.//a or .//button or .//div[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'factura') or contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'invoice')]]")
-        if rows:
-            invoice_link = rows[0]
-
-    if invoice_link is None:
-        logger.warning("No se detectó ninguna factura para abrir.")
+    opened = open_latest_invoice(driver)
+    if opened is None:
         return False
 
+    url, title = opened
     try:
-        if not safe_click(driver, invoice_link):
-            invoice_link.click()
-        logger.info("Abierta la factura más reciente.")
-        time.sleep(5)
+        return download_pdf_with_session(driver, url, _invoice_filename(url, title)) is not None
     except Exception as exc:
-        logger.warning("No se pudo abrir la factura automáticamente: %s", exc)
-
-    if find_and_click(driver, ["guardar en google drive", "guardar en drive", "save to google drive", "save to drive", "google drive"]):
-        logger.info("Iniciado guardado en Google Drive.")
-        time.sleep(5)
-        if find_and_click(driver, ["guardar", "save", "confirmar", "continuar", "ok"]):
-            logger.info("Confirmado el guardado en Google Drive.")
-        return True
-
-    if find_and_click(driver, ["descargar", "download"]):
-        logger.info("Descarga iniciada tras abrir factura.")
-        return True
-
-    logger.warning("No se encontró un botón de descarga ni Guardar en Google Drive después de abrir la factura.")
-    return False
+        logger.warning("No se pudo descargar el PDF de %s: %s", url, exc)
+        return False
 
 
 def load_last_run_date() -> Optional[date]:

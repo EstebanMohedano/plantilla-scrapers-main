@@ -20,6 +20,7 @@ services:
       - HOLDED_OTP=${HOLDED_OTP:-}
       - HOLDED_HEADLESS=${HOLDED_HEADLESS:-false}
       - HOLDED_KEEP_OPEN_SECONDS=${HOLDED_KEEP_OPEN_SECONDS:-300}
+      - HOLDED_DOWNLOAD_DIR=${HOLDED_DOWNLOAD_DIR:-/app/data/holded_downloads}
     volumes:
       - ./data:/app/data       # datos persistentes (cookies, perfiles, outputs)
     shm_size: 2gb
