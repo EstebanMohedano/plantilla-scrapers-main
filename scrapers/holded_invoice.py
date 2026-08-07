@@ -994,7 +994,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 7:
-            candidate = datetime(year, month, 7, 19, 20)
+            candidate = datetime(year, month, 7, 19, 45)
             if candidate > now:
                 return candidate
         month += 1
@@ -1007,7 +1007,7 @@ def should_run_today() -> bool:
     now = datetime.now()
     if now.day != 7:
         return False
-    if now.hour < 19 or (now.hour == 19 and now.minute < 20):
+    if now.hour < 19 or (now.hour == 19 and now.minute < 45):
         return False
     last_run = load_last_run_date()
     return last_run != now.date()
@@ -1019,7 +1019,7 @@ def run_scheduler() -> None:
     logger.info("Hora programada de la próxima ejecución: %s", next_run.strftime("%Y-%m-%d %H:%M"))
     if should_run_today():
         try:
-            logger.info("Hoy es 6 y aún no se ha ejecutado. Ejecutando ahora.")
+            logger.info("Hoy toca ejecución y aún no se ha lanzado. Ejecutando ahora.")
             download_invoice()
         except Exception as exc:
             logger.exception("Error en la ejecución de recuperación inmediata: %s", exc)
