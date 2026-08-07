@@ -66,7 +66,9 @@ fi
 # Lanza el programador mensual de Holded en background
 if [ -f /app/holded_invoice.py ]; then
   echo "📥 Iniciando descarga mensual de factura Holded..."
-  python -u /app/holded_invoice.py >> /app/data/holded_invoice.log 2>&1 &
+  # tee: el log va al fichero Y a stdout del contenedor, para poder leerlo
+  # desde Coolify sin entrar por shell.
+  python -u /app/holded_invoice.py 2>&1 | tee -a /app/data/holded_invoice.log &
   echo "📥 Logs de Holded: /app/data/holded_invoice.log"
 fi
 
