@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 HOLDEN_LOGIN_URL = "https://app.holded.com/login"
-HOLDEN_INVOICES_URL = "https://app.holded.com/sales/revenue#settings:/subscription/invoices"
-HOLDEN_REVENUE_URL = "https://app.holded.com/sales/revenue"
+HOLDEN_INVOICES_URL = "https://app.holded.com/home#settings:/subscription/invoices"
+HOLDEN_HOME_URL = "https://app.holded.com/home"
 # Las facturas del plan viven en un drawer que la SPA monta desde el fragmento
 # de la URL, no en una página propia.
 SUBSCRIPTION_HASH = "settings:/subscription/invoices"
@@ -815,9 +815,13 @@ def login(
             "No se pudo entrar por Google y no hay HOLDED_EMAIL/HOLDED_PASSWORD para el formulario."
         )
 
-    login_button = find_and_click(driver, ["iniciar sesión", "login", "sign in", "entrar"])
-    if login_button:
-        time.sleep(2)
+    # Sólo buscamos un botón que despliegue el formulario si este no está ya a
+    # la vista: en la pantalla actual de Holded los campos vienen visibles, y
+    # pulsar "Iniciar sesión" antes de rellenarlos únicamente dispara la
+    # validación de "Este campo es obligatorio".
+    if _visible_element(driver, "input[type='email'], input[name*='email'], input[id*='email']") is None:
+        if find_and_click(driver, ["iniciar sesión", "login", "sign in", "entrar"]):
+            time.sleep(2)
 
     email_input = WebDriverWait(driver, 30).until(
         EC.element_to_be_clickable((By.XPATH, "//input[@type='email' or contains(@name, 'email') or contains(@id, 'email') or contains(@placeholder, 'email')]"))
@@ -869,12 +873,21 @@ def subscription_panel_open(driver) -> bool:
         return False
 
 
-def open_subscription_drawer(driver, timeout: int = 30) -> bool:
-    """Abre el panel de facturas del plan forzando el cambio de fragmento.
+def wait_for_subscription_panel(driver, timeout: int = 40) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if subscription_panel_open(driver):
+            logger.info("Panel de facturas de suscripción abierto.")
+            return True
+        time.sleep(1)
+    return False
 
-    Cargar la URL completa de una vez no basta: la SPA sólo monta el drawer al
-    recibir un `hashchange`, así que con el hash ya presente en la carga
-    inicial se queda en el listado de "Facturas de venta" de fondo.
+
+def open_subscription_drawer(driver, timeout: int = 30) -> bool:
+    """Fuerza el fragmento sobre la página ya cargada.
+
+    Sólo como plan B: con la sesión iniciada, la URL completa abre el panel
+    por sí sola.
     """
     try:
         driver.execute_script(
@@ -886,35 +899,28 @@ def open_subscription_drawer(driver, timeout: int = 30) -> bool:
     except Exception as exc:
         logger.warning("No se pudo forzar el fragmento de suscripción: %s", exc)
         return False
-
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if subscription_panel_open(driver):
-            logger.info("Panel de facturas de suscripción abierto.")
-            return True
-        time.sleep(1)
-    return False
+    return wait_for_subscription_panel(driver, timeout)
 
 
 def navigate_to_invoices(driver) -> None:
     logger.info("Navegando a la página de facturas de Holded...")
-    driver.get(HOLDEN_REVENUE_URL)
+    driver.get(HOLDEN_INVOICES_URL)
     wait_for_page_ready(driver, timeout=30)
     accept_cookies(driver)
-    time.sleep(3)
 
+    if wait_for_subscription_panel(driver):
+        return
+
+    # Plan B: cargar /home limpio y forzar el fragmento después.
+    logger.warning("El panel no apareció con la URL directa; fuerzo el fragmento sobre /home.")
+    driver.get(HOLDEN_HOME_URL)
+    wait_for_page_ready(driver, timeout=30)
+    time.sleep(3)
     if open_subscription_drawer(driver):
         return
 
-    # Plan B: recarga con el hash ya puesto. En una segunda carga sobre la
-    # misma ruta algunas versiones de la SPA sí lo procesan.
-    logger.warning("El drawer no se abrió al cambiar el fragmento; recargo con la URL completa.")
-    driver.get(HOLDEN_INVOICES_URL)
-    wait_for_page_ready(driver, timeout=30)
-    time.sleep(3)
-    if not subscription_panel_open(driver) and not open_subscription_drawer(driver, timeout=15):
-        logger.warning("No se pudo abrir el panel de facturas de suscripción.")
-        save_debug_snapshot(driver, "sin-panel-suscripcion")
+    logger.warning("No se pudo abrir el panel de facturas de suscripción.")
+    save_debug_snapshot(driver, "sin-panel-suscripcion")
 
 
 def _wait_for_new_window(driver, known_handles: set, timeout: int = 30) -> Optional[str]:
@@ -1111,7 +1117,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 7:
-            candidate = datetime(year, month, 7, 21, 10)
+            candidate = datetime(year, month, 7, 22, 30)
             if candidate > now:
                 return candidate
         month += 1
@@ -1124,7 +1130,7 @@ def should_run_today() -> bool:
     now = datetime.now()
     if now.day != 7:
         return False
-    if now.hour < 21 or (now.hour == 21 and now.minute < 10):
+    if now.hour < 22 or (now.hour == 22 and now.minute < 30):
         return False
     last_run = load_last_run_date()
     return last_run != now.date()
