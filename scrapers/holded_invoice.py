@@ -1065,6 +1065,45 @@ def mark_last_run(date_value: datetime.date) -> None:
         f.write(date_value.strftime("%Y-%m-%d"))
 
 
+def wait_for_manual_login(driver, timeout: int) -> bool:
+    """Deja el navegador en la pantalla de login y espera a que entres por VNC.
+
+    Holded pide un código de 6 dígitos por correo al entrar desde un
+    dispositivo que no reconoce, así que ningún login automático puede
+    completarse solo. Como el Chrome compartido ya no se cierra al terminar,
+    la sesión que abras a mano queda viva para las siguientes ejecuciones.
+    """
+    driver.get(HOLDEN_LOGIN_URL)
+    logger.warning(
+        "No hay sesión activa. Entra por VNC (puerto 5900) y haz el login a mano: "
+        "espero hasta %d s. La sesión quedará abierta para las próximas ejecuciones.",
+        timeout,
+    )
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(5)
+        try:
+            url = driver.current_url.lower()
+        except Exception:
+            continue
+        if "app.holded.com" not in url or "login" in url:
+            continue
+        # Confirmamos que la sesión se sostiene, igual que tras el SSO.
+        time.sleep(5)
+        try:
+            if "login" in driver.current_url.lower():
+                continue
+        except Exception:
+            continue
+        logger.info("Login manual detectado. Continúo con la descarga.")
+        return True
+
+    logger.warning("Se agotó el tiempo esperando el login manual.")
+    save_debug_snapshot(driver, "sin-login-manual")
+    return False
+
+
 def release_shared_driver(driver) -> None:
     """Suelta el driver sin cerrar el Chrome que lanzó start.sh.
 
@@ -1126,13 +1165,20 @@ def download_invoice() -> None:
     set_download_folder(driver, DOWNLOAD_FOLDER)
     try:
         if not is_already_logged_in(driver):
-            logger.info("No hay sesión activa. Iniciando login de Holded...")
-            if not (google_email and google_password) and not (email and password):
-                raise RuntimeError(
-                    "No hay sesión activa y faltan credenciales "
-                    "(GOOGLE_EMAIL/GOOGLE_PASSWORD o HOLDED_EMAIL/HOLDED_PASSWORD)."
-                )
-            login(driver, email, password, otp, google_email, google_password)
+            manual_seconds = int(get_env("HOLDED_MANUAL_LOGIN_SECONDS", "600") or 0)
+            if manual_seconds > 0:
+                # Con verificación por correo de por medio, el login automático
+                # no puede terminar solo: esperamos al login manual por VNC.
+                if not wait_for_manual_login(driver, manual_seconds):
+                    raise RuntimeError("No hay sesión activa y no se completó el login manual.")
+            else:
+                logger.info("No hay sesión activa. Iniciando login de Holded...")
+                if not (google_email and google_password) and not (email and password):
+                    raise RuntimeError(
+                        "No hay sesión activa y faltan credenciales "
+                        "(GOOGLE_EMAIL/GOOGLE_PASSWORD o HOLDED_EMAIL/HOLDED_PASSWORD)."
+                    )
+                login(driver, email, password, otp, google_email, google_password)
         else:
             logger.info("Sesión Holded ya activa, saltando login.")
 
@@ -1167,8 +1213,8 @@ def next_monthly_run() -> datetime:
     month = now.month
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
-        if days_in_month >= 7:
-            candidate = datetime(year, month, 7, 23, 45)
+        if days_in_month >= 8:
+            candidate = datetime(year, month, 8, 0, 5)
             if candidate > now:
                 return candidate
         month += 1
@@ -1179,9 +1225,9 @@ def next_monthly_run() -> datetime:
 
 def should_run_today() -> bool:
     now = datetime.now()
-    if now.day != 7:
+    if now.day != 8:
         return False
-    if now.hour < 23 or (now.hour == 23 and now.minute < 45):
+    if now.hour == 0 and now.minute < 5:
         return False
     last_run = load_last_run_date()
     return last_run != now.date()
