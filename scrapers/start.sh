@@ -2,11 +2,9 @@
 
 echo "🚀 Iniciando infraestructura scraper..."
 
-# Limpiar locks de X y Chrome previos
+# Limpiar locks de X. NO borrar ni forzar el cierre del perfil de Chrome: ahí vive la sesión.
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
-killall -9 google-chrome chrome chromium 2>/dev/null || true
-find /app/data/chrome_profile -maxdepth 2 -type f \( -name "SingletonLock" -o -name "SingletonSocket" -o -name "SingletonCookie" \) -delete 2>/dev/null || true
-rm -rf /app/data/chrome_profile/Default/Service\ Worker/ScriptCache 2>/dev/null || true
+mkdir -p /app/data/chrome_profile
 sleep 1
 
 # Xvfb - display virtual
@@ -28,20 +26,30 @@ echo "🌐 Chrome CDP en :9223 ..."
 export DBUS_SESSION_BUS_ADDRESS=/dev/null
 export XDG_RUNTIME_DIR=/tmp/xdg-runtime
 mkdir -p "$XDG_RUNTIME_DIR"
-DISPLAY=:99 google-chrome-stable \
-  --no-sandbox \
-  --disable-gpu \
-  --disable-dev-shm-usage \
-  --remote-debugging-port=9223 \
-  --remote-debugging-address=0.0.0.0 \
-  --user-data-dir=/app/data/chrome_profile \
-  --no-first-run \
-  --disable-default-apps \
-  --disable-features=AudioServiceOutOfProcess,MediaSessionService \
-  --mute-audio \
-  --window-size=1920,1080 \
-  about:blank &>/dev/null &
-sleep 3
+
+# Si Chrome ya está vivo, lo reutilizamos. Si no, arrancamos SIEMPRE con el mismo
+# perfil persistente. Las cookies/localStorage de Holded y Google quedan en /app/data/chrome_profile.
+if ! curl -fsS http://127.0.0.1:9223/json/version >/dev/null 2>&1; then
+  # Borra únicamente locks huérfanos cuando NO hay un Chrome ejecutándose.
+  find /app/data/chrome_profile -maxdepth 2 -type f \
+    \( -name "SingletonLock" -o -name "SingletonSocket" -o -name "SingletonCookie" \) \
+    -delete 2>/dev/null || true
+
+  DISPLAY=:99 google-chrome-stable \
+    --no-sandbox \
+    --disable-gpu \
+    --disable-dev-shm-usage \
+    --remote-debugging-port=9223 \
+    --remote-debugging-address=0.0.0.0 \
+    --user-data-dir=/app/data/chrome_profile \
+    --no-first-run \
+    --disable-default-apps \
+    --disable-features=AudioServiceOutOfProcess,MediaSessionService \
+    --mute-audio \
+    --window-size=1920,1080 \
+    about:blank &>/dev/null &
+  sleep 3
+fi
 
 # Proxy socat: 9222 → 9223 (expone CDP al exterior)
 socat TCP-LISTEN:9222,bind=0.0.0.0,fork,reuseaddr TCP:127.0.0.1:9223 &

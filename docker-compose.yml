@@ -22,6 +22,8 @@ services:
       - HOLDED_KEEP_OPEN_SECONDS=${HOLDED_KEEP_OPEN_SECONDS:-300}
       - HOLDED_DOWNLOAD_DIR=${HOLDED_DOWNLOAD_DIR:-/app/data/holded_downloads}
       - HOLDED_MANUAL_LOGIN_SECONDS=${HOLDED_MANUAL_LOGIN_SECONDS:-600}
+      - HOLDED_CHROME_PROFILE=/app/data/chrome_profile
+      
     volumes:
       - ./data:/app/data       # datos persistentes (cookies, perfiles, outputs)
     shm_size: 2gb

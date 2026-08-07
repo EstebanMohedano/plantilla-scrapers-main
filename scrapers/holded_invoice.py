@@ -32,7 +32,7 @@ SUBSCRIPTION_PANEL_TEXT = "facturas de tu plan"
 # Carpeta donde queda el PDF. Se puede apuntar a una carpeta sincronizada con
 # Drive (rclone, Drive para escritorio...) vía HOLDED_DOWNLOAD_DIR.
 DOWNLOAD_FOLDER = os.getenv("HOLDED_DOWNLOAD_DIR", "/app/data/holded_downloads").strip() or "/app/data/holded_downloads"
-USER_DATA_DIR = "/app/data/holded_user_data"
+USER_DATA_DIR = os.getenv("HOLDED_CHROME_PROFILE", "/app/data/chrome_profile").strip() or "/app/data/chrome_profile"
 LAST_RUN_FILE = "/app/data/holded_invoice_last_run.txt"
 DEBUG_FOLDER = "/app/data/holded_debug"
 
