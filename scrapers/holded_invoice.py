@@ -993,8 +993,8 @@ def next_monthly_run() -> datetime:
     month = now.month
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
-        if days_in_month >= 6:
-            candidate = datetime(year, month, 6, 12, 41)
+        if days_in_month >= 7:
+            candidate = datetime(year, month, 7, 19, 20)
             if candidate > now:
                 return candidate
         month += 1
@@ -1005,9 +1005,9 @@ def next_monthly_run() -> datetime:
 
 def should_run_today() -> bool:
     now = datetime.now()
-    if now.day != 6:
+    if now.day != 7:
         return False
-    if now.hour < 12 or (now.hour == 12 and now.minute < 41):
+    if now.hour < 19 or (now.hour == 19 and now.minute < 20):
         return False
     last_run = load_last_run_date()
     return last_run != now.date()
