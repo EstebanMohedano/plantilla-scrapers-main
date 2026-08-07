@@ -878,8 +878,8 @@ def login(
     logger.info("Login completado con éxito.")
 
 
-def subscription_panel_open(driver) -> bool:
-    """True si el drawer de 'Facturas de tu plan Holded' está montado."""
+def _panel_text_here(driver) -> bool:
+    """True si el contexto actual contiene el título del panel."""
     try:
         return bool(
             driver.find_elements(
@@ -889,6 +889,46 @@ def subscription_panel_open(driver) -> bool:
         )
     except Exception:
         return False
+
+
+def subscription_panel_open(driver, depth: int = 2) -> bool:
+    """Busca el panel y deja el driver en el contexto donde vive.
+
+    Holded monta la zona de facturación en un iframe propio, así que mirar
+    sólo en el documento principal no lo encuentra aunque esté en pantalla.
+    Al devolver True el driver queda ya posicionado en el frame correcto, para
+    que la búsqueda posterior del botón 'Pagada' opere sobre el mismo
+    documento.
+    """
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        return False
+    return _find_panel_context(driver, depth)
+
+
+def _find_panel_context(driver, depth: int) -> bool:
+    if _panel_text_here(driver):
+        return True
+    if depth <= 0:
+        return False
+    try:
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
+    except Exception:
+        return False
+    for index, frame in enumerate(frames):
+        try:
+            driver.switch_to.frame(frame)
+        except Exception:
+            continue
+        if _find_panel_context(driver, depth - 1):
+            logger.info("El panel de suscripción está dentro de un iframe (#%d).", index)
+            return True
+        try:
+            driver.switch_to.parent_frame()
+        except Exception:
+            return False
+    return False
 
 
 def wait_for_subscription_panel(driver, timeout: int = 40) -> bool:
@@ -908,6 +948,9 @@ def open_subscription_drawer(driver, timeout: int = 30) -> bool:
     por sí sola.
     """
     try:
+        # El fragmento hay que cambiarlo en el documento principal, no en el
+        # iframe donde pueda haber quedado el driver de una búsqueda previa.
+        driver.switch_to.default_content()
         driver.execute_script(
             "if (window.location.hash === '#' + arguments[0]) { window.location.hash = ''; }"
             "window.location.hash = arguments[0];"
