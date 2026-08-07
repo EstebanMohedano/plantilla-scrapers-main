@@ -669,8 +669,20 @@ def complete_google_sso(driver, email: str, password: str, timeout: int = 150) -
             continue
 
         if "app.holded.com" in url and "login" not in url:
-            logger.info("Login por Google completado; de vuelta en Holded.")
-            return True
+            # Al volver del callback de OAuth se pasa un instante por una URL
+            # de Holded aunque la sesión no haya cuajado: un momento después
+            # rebota a /login. Confirmamos que la URL se sostiene antes de dar
+            # el login por bueno.
+            time.sleep(5)
+            try:
+                settled = driver.current_url.lower()
+            except Exception:
+                settled = url
+            if "login" not in settled:
+                logger.info("Login por Google completado; de vuelta en Holded.")
+                return True
+            logger.info("Holded rebotó al login tras el callback; sigo con el SSO.")
+            continue
 
         if "accounts.google.com" not in url:
             time.sleep(1)
@@ -802,7 +814,13 @@ def login(
 
     if google_email and google_password:
         if google_login(driver, google_email, google_password):
-            return
+            # No nos fiamos de que el SSO diga que terminó: comprobamos que la
+            # sesión aguanta una navegación real antes de seguir.
+            if is_already_logged_in(driver):
+                logger.info("Sesión de Holded confirmada tras el SSO de Google.")
+                return
+            logger.warning("El SSO dijo haber terminado pero Holded sigue pidiendo login.")
+            save_debug_snapshot(driver, "sso-sin-sesion")
         logger.warning("El login por Google no prosperó; intento el formulario de Holded.")
         driver.get(HOLDEN_LOGIN_URL)
         wait_for_page_ready(driver, timeout=30)
@@ -1047,6 +1065,34 @@ def mark_last_run(date_value: datetime.date) -> None:
         f.write(date_value.strftime("%Y-%m-%d"))
 
 
+def release_shared_driver(driver) -> None:
+    """Suelta el driver sin cerrar el Chrome que lanzó start.sh.
+
+    `driver.quit()` cerraría ese navegador, y con él la sesión de Google que
+    vive en el perfil: el intento del mes siguiente tendría que volver a
+    loguearse desde cero y depender de que Google no pida verificación.
+    Dejamos abierta sólo la pestaña original en about:blank.
+    """
+    try:
+        handles = driver.window_handles
+        for handle in handles[1:]:
+            driver.switch_to.window(handle)
+            driver.close()
+        if handles:
+            driver.switch_to.window(handles[0])
+            driver.get("about:blank")
+        logger.info("Chrome compartido liberado sin cerrarlo; la sesión queda viva.")
+    except Exception as exc:
+        logger.warning("No se pudo dejar limpio el Chrome compartido: %s", exc)
+
+    # undetected_chromedriver llama a quit() al destruir el objeto, lo que
+    # mataría el navegador más tarde: lo anulamos en esta instancia.
+    try:
+        driver.quit = lambda *args, **kwargs: None
+    except Exception:
+        pass
+
+
 def download_invoice() -> None:
     email = get_env("HOLDED_EMAIL")
     password = get_env("HOLDED_PASSWORD")
@@ -1059,6 +1105,7 @@ def download_invoice() -> None:
     user_data_dir = USER_DATA_DIR
     os.makedirs(user_data_dir, exist_ok=True)
 
+    shared_chrome = not headless
     try:
         driver = build_driver(
             DOWNLOAD_FOLDER,
@@ -1069,6 +1116,7 @@ def download_invoice() -> None:
         )
     except Exception as exc:
         logger.warning("No se pudo conectar a Chrome existente (%s). Iniciando sesión nueva...", exc)
+        shared_chrome = False
         driver = build_driver(
             DOWNLOAD_FOLDER,
             user_data_dir=user_data_dir,
@@ -1107,7 +1155,10 @@ def download_invoice() -> None:
             time.sleep(keep_open)
         raise
     finally:
-        driver.quit()
+        if shared_chrome:
+            release_shared_driver(driver)
+        else:
+            driver.quit()
 
 
 def next_monthly_run() -> datetime:
@@ -1117,7 +1168,7 @@ def next_monthly_run() -> datetime:
     while True:
         days_in_month = calendar.monthrange(year, month)[1]
         if days_in_month >= 7:
-            candidate = datetime(year, month, 7, 22, 30)
+            candidate = datetime(year, month, 7, 22, 50)
             if candidate > now:
                 return candidate
         month += 1
@@ -1130,7 +1181,7 @@ def should_run_today() -> bool:
     now = datetime.now()
     if now.day != 7:
         return False
-    if now.hour < 22 or (now.hour == 22 and now.minute < 30):
+    if now.hour < 22 or (now.hour == 22 and now.minute < 50):
         return False
     last_run = load_last_run_date()
     return last_run != now.date()
